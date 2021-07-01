@@ -41,15 +41,34 @@ cd -
 ```
 
 ## installing mods using mod4f4
-### RTFM, and not only here
-
-Always read the relevant documentation per mod. This script attempts to place files correctly in the root of Fallout 4 or its subdirectories as required, and maintains the original case of files and directories, to prevent duplicates. Finally it commits those changes. Always check that the location of placement was correctly.
 
 ### how to invoke
 
-If only part of the contents are required, then use --include="<extended regular expression>"
+```Bash
+./mod4f4 [--include=<extended regular expression>] <archive.7z|archive.rar|archive.zip> [rsync commands..]
+```
 
-You can run the script like this:
+If only part of the contents are required, then use --include="\[extended regular expression\]"
+
+
+
+### What mod4f4 does
+
+1. The archive will be extracted if here, or in a subdirectory, dependent on the structure of the archive.
+2. Decided is where the data should be placed, based on the filenames in the Fallout 4 and extracted folder contents.
+3. All data or whatever --include nmatched will be rsynced to the correct location in Fallout 4.
+4. duplicates for directories will be resolved. The files will adapt to the case of the originally revision controled files.
+5. Added and changed files are committed.
+
+The command is pretty verbose, and not all warnings printed are severe. Just verify that the location of placement was correct.
+
+### RTFM, and not only here
+
+Always read the relevant documentation per mod. Modules have dependencies, or collisions, and order is important. This script does not resolve this. In below list I considered these dependencies, and were unrestrained based the order module latest update (or its first posting).
+
+Finally after the installation is done run the Bodyslidesteam executable you created and  batch build, for all the models.
+
+## Examples
 
 ```Bash
  ## F4SE
@@ -68,7 +87,9 @@ In Steam Library, right-click on Fallout 4. Properties. "Launch Options" add `f4
  # actually (again) the --include=.. argument might be unneccesary (TODO: try without)
 ```
 
-Create a launcher in steam, using proton experimental pointing to BodySlide
+Create a `BodySlide` launcher in steam, using target `BodySlide.exe` and start in<br>
+`"${HOME}/.steam/steam/steamapps/common/Fallout 4/Data/Tools/BodySlide"`<br>
+Make sure to use proton experimental in the compatibility section.
 
 ```Bash
 ## Enhanced Vanilla Bodies [18-02-2017]
@@ -114,7 +135,6 @@ sed -i -r '/^\[Launcher\]/{
 
 ./mod4f4 --include="([0-9][^/]+/|FOMOD)" "dnld/AAF Beta"*.7z
 ```
- 
-Run the Bodyslide batch build, to build all the models.
+
 
 
