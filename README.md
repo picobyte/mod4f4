@@ -1,8 +1,13 @@
 
 # mod4f4
-This script uses git to manage changes to Fallout 4.
+This script uses git to manage manual modules for Fallout 4.
 
 There are other management tools that are likely used more often. This script is to enable a Linux commandline solution for manual packages manager and git-based revision control.
+
+Required are Linux commandline tools:
+git, 7z, unrar, unzip, rsync, perl, sed, bash, sort, uniq, wc
+
+This was tested on Linux, but could work on the os/x commandline.
 
 clone the repository outside your Fallout 4 directory, where you do have sufficient space.
 ```Bash
