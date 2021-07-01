@@ -1,0 +1,144 @@
+#!/bin/bash
+# GPL 
+#
+# requires linux commandline tools:
+# git, 7z, unrar, unzip, rsync, perl, sed, bash, sort, uniq, wc
+
+set -x
+
+usage="Usage: $0 [--include=re] <archive>"
+# where mod packages are stored
+moddir="$PWD"
+
+die() {
+    cd "$moddir"
+    echo -e "${1:-$usage}\n" 1>&2;
+    exit ${2:-1}
+}
+
+[ -e "$moddir/f4/Fallout4.exe" ] || die "You need to symlink the Fallout 4 directory to f4 in this directory\n\$path_to/SteamLibrary/steamapps"
+[ -d "$moddir/f4/.git" ] || die "you need to run \`git init' in the directory f4 points to (takes several minutes)"
+
+dedup4f4_dirs() {
+  dups="$(find -H * -mount -type d | sort --ignore-case | uniq -i -D)"
+  [ -z "$dups" ] && return 0 # done
+  firstd=;
+  dedup4f4_dir_code=0
+  while read d; do
+    if [ -n "$firstd" ] && [ "${d,,}" = "${firstd,,}" ]; then
+      fst_in_repo="$(git ls-files "$firstd/")"
+      snd_in_repo="$(git ls-files "$d/")"
+      if [ -n "$snd_in_repo" ]; then
+        [ -n "$fst_in_repo" ] && die "both $firstd and $d are tracked" 126
+        #rsync --safe-links --del --prune-empty-dirs -rlptgov "$firstd" "$d/"
+        mv "$firstd"/* "$d/"
+        rmdir --ignore-fail-on-non-empty "$firstd/"
+        firstd="$d"
+      else
+        [ -z "$fst_in_repo" ] && echo "neither $firstd nor $d tracked, just using first" 1>&2
+        #rsync --safe-links --del --prune-empty-dirs -rlptgov  "$d" "$firstd/"
+        mv "$d"/* "$firstd/"
+        rmdir --ignore-fail-on-non-empty "$d/"
+      fi
+    else
+      firstd="$d"
+    fi
+  done < <(echo "$dups" | perl -e 'print sort { length($b) <=> length($a) } <>')
+  return 1 # ok, repeat.
+}
+
+dedup4f4_files() {
+  # replace filenames, preserving original names
+  while read a b; do
+    if [ "${a,,}" != "${b,,}" ]; then
+      echo "$a and $b differ more than only in the case"
+      break
+    fi
+    if [ -n "$(git ls-files "$a")" ]; then
+      mv "$b" "$a";
+    elif [ -n "$(git ls-files "$b")" ]; then
+      mv "$a" "$b"
+    else
+      echo "$a and $b untracked" 1>&2
+      break; 
+    fi
+  done < <(find -H * -mount -type f | sort --ignore-case | uniq -i -D | sed 'N;s/\n/ /')
+}
+
+
+# whether or not you capture the trailing directory slash with --include regexp matterd.
+# if uncaptured the directory is copied, otherwise the directory contents.
+
+dest=Data/
+#traverse= [--traverse|-t] 
+re="[^ ][^/]*"
+while [ $# -ne 0 ] ;do
+  case "$1" in
+    --include=*) re="${1:10}";;
+    #--traverse|-t) traverse=1;;
+    *) break;;
+  esac
+  shift;
+done
+ar="$1"
+shift
+if [ ! -e "$ar" ]; then
+  echo "$usage ($ar)" 1>&2;
+  exit 1;
+fi
+
+case "${ar##*.}" in
+  7z) uz="7z ";;
+  zip) uz="unzip -";;
+  rar) uz="unrar ";;
+  *) echo "unrecognized extension for $ar, is it an archive?" 1>&2;
+     exit 1;;
+esac
+# all list files between these markers
+src="$(${uz}l "$ar" | sed -n -r "/^---/,/^---/{/^---/!s~^.*  ($re)(.*)?$~\1~p}" | uniq)"
+
+[ -z "$src" ] && die "$re matches no files in $ar"
+stash="$(basename "${ar%.*}")"
+
+if [[ $re =~ ^([^][(){}\\]|\\.)+(/|$) ]]; then
+  stash="${re%%/*}"
+  [ ! -d "$stash" ] && ${uz}x "$ar"
+  find -H f4/ -mount -maxdepth 1 | grep -i -q -w -f <(ls -1 "$stash")
+  [ $? -eq 0 ] && dest=""
+elif [ $(echo "$src" | wc -l) -ne 1 ]; then
+  src="$(echo "$src" | sed -r "s~^~$stash/~")"
+else
+  nest="$(find -H f4/ -mount -maxdepth 2 -type d -iname "$src" | perl -e 'print sort { length($a) <=> length($b) } <>' | head -n 1)"
+
+  case "$nest" in
+      f4/*/*) dest="$(dirname "${nest#f4/}")"
+              src="$(echo "$src" | sed -r "s~^~$stash/~")";;
+      f4/*) dest=""
+            src="$(echo "$src" | sed -r "s~^~$stash/~")";;
+      "") stash="$src"
+          [ "$re" = "[^ ][^/]*" ] && src="$(${uz}l "$ar" | sed -n -r "/^---/,/^---/{/^---/!s~^.*  ($src/$re)(.*)?$~\1~p}" | uniq)";;
+  esac
+fi
+
+if [ ! -d "$stash" ]; then
+  mkdir "$stash" || exit 1
+  cd "$stash"
+  ${uz}x "$moddir/$ar" || die "..that was \`${uz}x $moddir/$ar' that failed." 2
+fi
+
+# if this complains nich has illegal characters
+cd "$moddir/f4"
+exclude_git=
+[ -z "$dest" ] && exclude_git='--exclude="*/.git*"'
+while read d; do
+  echo from `pwd` rsync --safe-links -rlptgov $exclude_git "$@" "$moddir/$d" "$dest"
+  rsync --safe-links --prune-empty-dirs -rlptgov $exclude_git "$@" "$moddir/$d" "$dest"|| { cd "$moddir"; exit 2;}
+  until dedup4f4_dirs; do
+    [ $? -eq 126 ] && { cd "$moddir"; exit 126; }
+  done
+  dedup4f4_files
+  git ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
+done < <(echo "$src")
+
+git commit -m "Added mod $stash ($(basename "$ar"))";
+cd "$moddir"
