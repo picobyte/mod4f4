@@ -1,13 +1,16 @@
 
 # mod4f4
-This script uses git to manage manual modules for Fallout 4.
+A script to manage manual modules for Fallout 4 using git revision control.
 
 There are other management tools that are likely used more often. This script is to enable a Linux commandline solution for manual packages manager and git-based revision control.
 
+## Requirements
 Required are Linux commandline tools:
 git, 7z, unrar, unzip, rsync, perl, sed, bash, sort, uniq, wc
 
-This was tested on Linux, but could work on the os/x commandline.
+This was tested on Linux, but could work on the os/x commandline, maybe after some adaptations.
+
+## Initialization
 
 clone the repository outside your Fallout 4 directory, where you do have sufficient space.
 ```Bash
@@ -30,23 +33,29 @@ git init
 ```
 
 Adding the files under revision control takes a while. Optionally create a `.gitignore` file containing files or locations that will never be changed, to limit the number of files under revision.
+
 ```Bash
 git ls-files -o --exclude-standard | xargs -r -d "\n" -I {} git add "{}"
 git commit -m 'clean Fallout 4'
 cd -
 ```
 
+## installing mods using mod4f4
+### RTFM, and not only here
+
 Always read the relevant documentation per mod. This script attempts to place files correctly in the root of Fallout 4 or its subdirectories as required, and maintains the original case of files and directories, to prevent duplicates. Finally it commits those changes. Always check that the location of placement was correctly.
+
+### how to invoke
 
 If only part of the contents are required, then use --include="<extended regular expression>"
 
 You can run the script like this:
 
-## F4SE
 ```Bash
+ ## F4SE
 ./mod4f4 --include="f4se_0_06_21/(Data|.*\.(exe|dll))" dnld/f4se_*.7z
 
-# actually I believe the --include aregument here is unneccesary (TODO: try without)
+# actually the --include=.. argument might be unneccesary (TODO: try without)
 ```
 
 In Steam Library, right-click on Fallout 4. Properties. "Launch Options" add `f4se_loader.exe`
@@ -55,6 +64,8 @@ In Steam Library, right-click on Fallout 4. Properties. "Launch Options" add `f4
 ## BodySlide [19-01-2021]
 
 ./mod4f4 --include="(FOMod|Textures|Tools)" dnld/"BodySlide and Outfit Studio"*.7z
+ 
+ # actually (again) the --include=.. argument might be unneccesary (TODO: try without)
 ```
 
 Create a launcher in steam, using proton experimental pointing to BodySlide
