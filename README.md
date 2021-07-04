@@ -1,80 +1,88 @@
 
 # mod4f4
-A script to manage manual modules for Fallout 4 using git revision control.
+A script to manage modules using git revision control and rsync.
 
-There are other management tools that are likely used more often. This script is to enable a Linux commandline solution for manual packages manager and git-based revision control.
+There are other management tools that are used more often, like vortex or mod organiser 2. If those work for you, try them instead. If not, this script provides a Linux commandline solution for manual packages manager with git revision control. In theory it could work on the mac OS x commandline, but may need adaptations because not all command work the same (I cannot test it but am interested).
+
+After a clean Fallout 4 `./mod4f4 --init', subsequent module installations should be undoable to return to this initial Fallout 4 commit, using git. I've tested this and experienced no problems, but since I obviously cannot be held accountable, advisable is to make a backup of your game directory first.
+
+This version control works for installation of most mods, but requires the user to read the mod instructions carefully, be selective, resolve dependencies and prevent mentioned collisions. given:
 
 ## Requirements
-Required are Linux commandline tools:
+
+User has knowledge of git and extended regular expressions, and at least a bit of bash and rsync.
+Also some knowledge of Fallout 4 modules is convenient, and a general willingness to read their documentation.
+
+Commandline tools are installed:
 git, 7z, unrar, unzip, rsync, perl, sed, bash, sort, uniq, wc
 
-This was tested on Linux, but could work on the os/x commandline, maybe after some adaptations.
 
-## Initialization
+## git
+
+Revision control; branches, bisecting problems, cherry-picking commits and resolving conflicts; nuf said. These subjects won't be covered here, though. The user is supposed to be familiar with these concepts.
+
+
+## rsync
+
+Rsync has options for finetuning transfer and to prevent modules to have an effect outside the game directory.
+
+## Initialize
 
 clone the repository outside your Fallout 4 directory, where you do have sufficient space.
 ```Bash
 git clone https://github.com/picobyte/mod4f4.git
 cd mod4f4
 chmod +x mod4f4
+./mod4f4 --init
 ```
 
-Symlink the directory where steam is installed, by default:
-```Bash
-ln -s "${HOME}/.steam/steam/SteamApps/common/Fallout 4" f4
-```
-You nay want to also symlink your download directory. This document assumes it's placed or linked in `dnld`. Also make a the directory with the Fallout 4 .ini files a repository as well. The changes therein are listed here but not the revision control; mod4f4 does not manage this.
+You nay want to also symlink your module download directory. This document assumes it is in `dnld/`. Also make the directory with the Fallout 4 .ini files a repository. The changes therein are listed here but not the revision control; manage that manually.
 
-Finally, put the Fallout 4 directory under revision control by git, add the original Falloput 4 with all required content as initial commit
-
-```Bash
-cd f4/
-git init
-```
-
-Adding the files under revision control takes a while. Optionally create a `.gitignore` file containing files or locations that will never be changed, to limit the number of files under revision.
-
-```Bash
-git ls-files -o --exclude-standard | xargs -r -d "\n" -I {} git add "{}"
-git commit -m 'clean Fallout 4'
-cd -
-```
+Adding the files under revision control takes a while. A `.gitignore` file in your f4/ directory excludes files from revision control, this is inadvisable; if modules do touch those files, you're sh*t out of luck.
 
 ## installing mods using mod4f4
 
-### how to invoke
+### Usage
 
-```Bash
-./mod4f4 [--include=<extended regular expression>] <archive.7z|archive.rar|archive.zip> [rsync commands..]
 ```
+./mod4f4 [options..] <archive.7z|archive.rar|archive.zip> [rsync options..]
 
-If only part of the contents are required, then use --include="\[extended regular expression\]"
+Options:
 
+    --subset=<extended regular expression>  includes only the matching module (sub)directories
+    --keep-mod: do not clean up the extracted module directory after commit.
+    --no-stage: don't stage and commit (allows manual staging). This implies --keep-mod.
+                Note that together with the --dry-run rsync option, no package contents are transferred.
+                The filename and directoryname case-insensitivity resolution is still run, though.
+    --message=<string> commit with this specified message.
+
+for rsync options, see \`man rsync' or \`rsync --help'
+```
 
 
 ### What mod4f4 does
 
-1. The archive will be extracted if here, or in a subdirectory, dependent on the structure of the archive.
-2. Decided is where the data should be placed, based on the filenames in the Fallout 4 and extracted folder contents.
-3. All data or whatever --include nmatched will be rsynced to the correct location in Fallout 4.
-4. duplicates for directories will be resolved. The files will adapt to the case of the originally revision controled files.
-5. Added and changed files are committed.
+1. The archive will be extracted; in a subdirectory with the basename, dependent on the contents of the archive.
+2. Decided is where the data should be placed, based on the filenames in f4/ and extracted folder contents.
+3. All data or whatever --subset matched will be rsynced to this location in Fallout 4.
+4. case-insensitivity duplicates for directories and files will be resolved. Names adapt to the earlier tracked filenames.
+5. Added and changed files are staged and committed.
 
-The command is pretty verbose, and not all warnings printed are severe. Just verify that the location of placement was correct.
+The output is verbose, and not all warnings printed are severe. Just verify that the location of placement was correct.
 
 ### RTFM, and not only here
 
-Always read the relevant documentation per mod. Modules have dependencies, or collisions, and order is important. This script does not resolve this. In below list I considered these dependencies, and were unrestrained based the order module latest update (or its first posting).
+Always read the relevant documentation per mod. Modules have dependencies, or collisions, and order is important. This script does not resolve this. In below list I considered dependencies, and where unrestrained, based the order on the module's last update (or its first appearance).
 
-Finally after the installation is done run the Bodyslidesteam executable you created and  batch build, for all the models.
+As a last step, after the installation is done, run the Bodyslide steam executable you created and batch build, for all the models.
 
 ## Examples
 
 ```Bash
  ## F4SE
-./mod4f4 --include="f4se_0_06_21/(Data|.*\.(exe|dll))" dnld/f4se_*.7z
+./mod4f4 --subset="f4se_0_06_21/(Data|.*\.(exe|dll))" dnld/f4se_*.7z
 
-# actually the --include=.. argument might be unneccesary (TODO: try without)
+# actually the --subset=.. argument might be unneccesary (TODO: try without)
 ```
 
 In Steam Library, right-click on Fallout 4. Properties. "Launch Options" add `f4se_loader.exe`
@@ -82,9 +90,9 @@ In Steam Library, right-click on Fallout 4. Properties. "Launch Options" add `f4
 ```Bash
 ## BodySlide [19-01-2021]
 
-./mod4f4 --include="(FOMod|Textures|Tools)" dnld/"BodySlide and Outfit Studio"*.7z
+./mod4f4 --subset="(FOMod|Textures|Tools)" dnld/"BodySlide and Outfit Studio"*.7z
  
- # actually (again) the --include=.. argument might be unneccesary (TODO: try without)
+ # actually (again) the --subset=.. argument might be unneccesary (TODO: try without)
 ```
 
 Create a `BodySlide` launcher in steam, using target `BodySlide.exe` and start in<br>
@@ -118,12 +126,12 @@ sed -i -r '/^\[Launcher\]/{
 
 ## CBBE [19-04-2020]
 
-./mod4f4 --include="((00|1[89]|2[0-6]) [A-Z][^/]+/|FOMod)" "dnld/Caliente's Beautiful Bodies Enhancer - v"*.7z
+./mod4f4 --subset="((00|1[89]|2[0-6]) [A-Z][^/]+/|FOMod)" "dnld/Caliente's Beautiful Bodies Enhancer - v"*.7z
 
 
 ### dismemberment
 
-./mod4f4 --include="((00|1[89]|2[0-6]) [A-Z][^/]+/|FOMod)" "dnld/CBBE Reduced (with dismemberment)-"*.7z
+./mod4f4 --subset="((00|1[89]|2[0-6]) [A-Z][^/]+/|FOMod)" "dnld/CBBE Reduced (with dismemberment)-"*.7z
 
 
 ## AWKCR [05-01-2020]
@@ -133,7 +141,11 @@ sed -i -r '/^\[Launcher\]/{
 
 ## AAF [17-01-2021] prereq: LooksMenu
 
-./mod4f4 --include="([0-9][^/]+/|FOMOD)" "dnld/AAF Beta"*.7z
+./mod4f4 --subset="([0-9][^/]+/|FOMOD)" "dnld/AAF Beta"*.7z
+
+
+# run the bodyslide batch build now.
+
 ```
 
 

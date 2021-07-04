@@ -1,91 +1,131 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # GPL 
-#
-# requires linux commandline tools:
-# git, 7z, unrar, unzip, rsync, perl, sed, bash, sort, uniq, wc
 
-set -x
+[ -n "$DEBUG" ] && set -x
 
-usage="Usage: $0 [--include=re] <archive>"
-# where mod packages are stored
+usage="Usage: $0 [options..] <archive.7z|archive.rar|archive.zip> [rsync options..]
+
+Options:
+    --init: set up links and git revision control (no other arguments required).
+
+    --subset=<extended regular expression>  includes only the matching module (sub)directories.
+
+                Whether or not a directories trailing slash is included in the capture matters.
+                If uncaptured the directory is copied, otherwise the directory contents as rsync behaves.
+
+    --keep-mod: do not clean up the extracted module directory after commit.
+    --no-stage: don't stage and commit (allows manual staging). This implies --keep-mod.
+                Note that together with the --dry-run rsync option, no package contents are transferred.
+                The filename and directoryname case-insensitivity resolution is still run, though.
+
+    --message=<string> commit with this specified message.
+
+for rsync options, see \`man rsync' or \`rsync --help'
+"
 moddir="$PWD"
 
-die() {
-    cd "$moddir"
-    echo -e "${1:-$usage}\n" 1>&2;
-    exit ${2:-1}
+sha512out="9197a9a0bc6fc760387b7d119f8464545bc97d44fbc2696c22bdd6125973a9b5d90cf803e7356752cb4b942e75afe680dd08bb9734bf549065abb529ce4735be  -"
+DLC="Coast NukaWorld Robot UltraHighResolution workshop"
+
+warn() {
+  echo -e "$1\n" 1>&2;
 }
 
-[ -e "$moddir/f4/Fallout4.exe" ] || die "You need to symlink the Fallout 4 directory to f4 in this directory\n\$path_to/SteamLibrary/steamapps"
-[ -d "$moddir/f4/.git" ] || die "you need to run \`git init' in the directory f4 points to (takes several minutes)"
+die() {
+  cd "$moddir"
+  warn "${1:-$usage}";
+  exit ${2:-1}
+}
 
-dedup4f4_dirs() {
-  dups="$(find -H * -mount -type d | sort --ignore-case | uniq -i -D)"
-  [ -z "$dups" ] && return 0 # done
-  firstd=;
-  dedup4f4_dir_code=0
-  while read d; do
-    if [ -n "$firstd" ] && [ "${d,,}" = "${firstd,,}" ]; then
-      fst_in_repo="$(git ls-files "$firstd/")"
-      snd_in_repo="$(git ls-files "$d/")"
-      if [ -n "$snd_in_repo" ]; then
-        [ -n "$fst_in_repo" ] && die "both $firstd and $d are tracked" 126
-        #rsync --safe-links --del --prune-empty-dirs -rlptgov "$firstd" "$d/"
-        mv "$firstd"/* "$d/"
-        rmdir --ignore-fail-on-non-empty "$firstd/"
-        firstd="$d"
-      else
-        [ -z "$fst_in_repo" ] && echo "neither $firstd nor $d tracked, just using first" 1>&2
-        #rsync --safe-links --del --prune-empty-dirs -rlptgov  "$d" "$firstd/"
-        mv "$d"/* "$firstd/"
-        rmdir --ignore-fail-on-non-empty "$d/"
+requirements=
+for cmd in git 7z unrar unzip rsync perl sed bash sort uniq wc; do
+  which $cmd &> /dev/null
+  [ $? -eq 0 ] || requirements="${requirements+\n}$cmd not found."
+done
+[ -n "$requirements" ] && die "${requirements}\ninstall aforementioned on your system first"
+
+# set up links to Fallout 4 if not already present
+if [ "$1" = "--init" ] || [ "$1" = "--init-no-check" ]; then
+  if [ ! -e "$moddir/f4" ]; then
+    STEAM_LIBRARY="${STEAM_LIBRARY:-${HOME}/.steam/steam}"
+    [ ! -d "$STEAM_LIBRARY" ] && die "Steam library is not linked, nor is it found in the specified or default location. run with\nSTEAM_LIBRARY='PATH' $0\nwhere PATH is what is listed in your Steam->Settings->Downloads->STEAM LIBRARY FOLDERS (the one with default=yes)"
+    f4="${STEAM_LIBRARY}/SteamApps/common/Fallout 4"
+    [ -d "$f4" ] || die "You don't seem to have Fallout 4 installed in '$f4'"
+    ln -s "$f4" f4
+  fi
+
+  if [ ! -d "$moddir/f4/.git" ]; then
+    cd f4/
+    if ["$1" = "--init" ]; then
+      for dlc in ${DLC}; do 
+        [ -z "$(ls -1 "f4.$dlc"*)" ] && die "You seem to be missing downloadable content $dlc (ignored with --init-no-check)"
+      done
+      if [ "$(find * | egrep -v '^(\.git|Data/DLC)' | sha512sum)" != "$sha512out" ]; then
+        die "Your Fallout 4 directory seems to already have modules applied (ignored with --init-no-check)"
       fi
-    else
-      firstd="$d"
     fi
-  done < <(echo "$dups" | perl -e 'print sort { length($b) <=> length($a) } <>')
+    git init
+    warn "Setting up revision control.. (takes a few minutes)" 1>&2
+    git ls-files -o --exclude-standard | xargs -r -d "\n" -I {} git add "{}"
+    git commit -m 'Clean Fallout 4 game'
+    cd -
+  fi
+  exit 0
+elif [ ! -e "$moddir/f4" ]; then
+  die "run $0 --init to set up links and revision control (takes several minutes)."
+fi
+
+# resolve file or directory name windows case-insensitivity duplicates by preserving the earliest tracked name
+# argument d or f: -type to find
+resolve_tracked_case_insensitivity_for_type() {
+  dups="$(find -H * -mount -type $1 | sort --ignore-case | uniq -i -D)"
+  [ -z "$dups" ] && return 0 # done
+  first=;
+  while read snd; do
+    if [ -n "$first" ] && [ "${snd,,}" = "${first,,}" ]; then
+      fst_in_repo="$(git ls-files "$first/")"
+      snd_in_repo="$(git ls-files "$snd/")"
+      if [ -n "$snd_in_repo" ]; then
+        [ -n "$fst_in_repo" ] && die "both $first and $snd are tracked" 126
+        [ -d "$snd" ] && mv "$first"/* "$snd/" || mv "$first" "$snd";
+        first="$snd"
+      else
+        [ -z "$fst_in_repo" ] && echo "neither $first nor $snd tracked, just using first" 1>&2
+        [ -d "$snd" ] && mv "$snd"/* "$first/" || mv "$snd" "$first"
+      fi
+      rmdir --ignore-fail-on-non-empty "$snd/"
+    else
+      first="$snd"
+    fi
+  done < <(echo "$dups")
   return 1 # ok, repeat.
 }
 
-dedup4f4_files() {
-  # replace filenames, preserving original names
-  while read a b; do
-    if [ "${a,,}" != "${b,,}" ]; then
-      echo "$a and $b differ more than only in the case"
-      break
-    fi
-    if [ -n "$(git ls-files "$a")" ]; then
-      mv "$b" "$a";
-    elif [ -n "$(git ls-files "$b")" ]; then
-      mv "$a" "$b"
-    else
-      echo "$a and $b untracked" 1>&2
-      break; 
-    fi
-  done < <(find -H * -mount -type f | sort --ignore-case | uniq -i -D | sed 'N;s/\n/ /')
-}
-
-
-# whether or not you capture the trailing directory slash with --include regexp matterd.
+# whether or not you capture the trailing directory slash with --subset regexp matterd.
 # if uncaptured the directory is copied, otherwise the directory contents.
 
+keep_mod=0
+stage=1
+commit_message=
 dest=Data/
-#traverse= [--traverse|-t] 
 re="[^ ][^/]*"
 while [ $# -ne 0 ] ;do
   case "$1" in
-    --include=*) re="${1:10}";;
-    #--traverse|-t) traverse=1;;
+    --subset=*) re="${1:10}";;
+    --subset) shift; re="$1";;
+    --keep-mod) keep_mod=1;;
+    --no-stage) stage=0;;
+    --message=*) commit_message="${1:11}";;
+    --message) shift; commit_message="$1";;
+    --*) die "$usage\nError: unrecognized option $1 (rsync options come after the mod archive)";;
     *) break;;
   esac
   shift;
 done
+
 ar="$1"
 shift
-if [ ! -e "$ar" ]; then
-  echo "$usage ($ar)" 1>&2;
-  exit 1;
-fi
+[ -e "$ar" ] || die "${usage}\nError: No archive: '$ar'"
 
 case "${ar##*.}" in
   7z) uz="7z ";;
@@ -111,12 +151,12 @@ else
   nest="$(find -H f4/ -mount -maxdepth 2 -type d -iname "$src" | perl -e 'print sort { length($a) <=> length($b) } <>' | head -n 1)"
 
   case "$nest" in
-      f4/*/*) dest="$(dirname "${nest#f4/}")"
-              src="$(echo "$src" | sed -r "s~^~$stash/~")";;
-      f4/*) dest=""
+    f4/*/*) dest="$(dirname "${nest#f4/}")"
             src="$(echo "$src" | sed -r "s~^~$stash/~")";;
-      "") stash="$src"
-          [ "$re" = "[^ ][^/]*" ] && src="$(${uz}l "$ar" | sed -n -r "/^---/,/^---/{/^---/!s~^.*  ($src/$re)(.*)?$~\1~p}" | uniq)";;
+    f4/*) dest=""
+          src="$(echo "$src" | sed -r "s~^~$stash/~")";;
+    "") stash="$src"
+        [ "$re" = "[^ ][^/]*" ] && src="$(${uz}l "$ar" | sed -n -r "/^---/,/^---/{/^---/!s~^.*  ($src/$re)(.*)?$~\1~p}" | uniq)";;
   esac
 fi
 
@@ -124,21 +164,25 @@ if [ ! -d "$stash" ]; then
   mkdir "$stash" || exit 1
   cd "$stash"
   ${uz}x "$moddir/$ar" || die "..that was \`${uz}x $moddir/$ar' that failed." 2
+else
+  keep_mod=1
 fi
 
-# if this complains nich has illegal characters
 cd "$moddir/f4"
 exclude_git=
-[ -z "$dest" ] && exclude_git='--exclude="*/.git*"'
+[ -z "$dest" ] && exclude_git='--exclude="f4/.git*"'
+
 while read d; do
+
   echo from `pwd` rsync --safe-links -rlptgov $exclude_git "$@" "$moddir/$d" "$dest"
   rsync --safe-links --prune-empty-dirs -rlptgov $exclude_git "$@" "$moddir/$d" "$dest"|| { cd "$moddir"; exit 2;}
-  until dedup4f4_dirs; do
-    [ $? -eq 126 ] && { cd "$moddir"; exit 126; }
-  done
-  dedup4f4_files
-  git ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
+
+  until resolve_tracked_case_insensitivity_for_type d; do :; done
+  resolve_tracked_case_insensitivity_for_type f
+
+  [ $stage -eq 1 ] && git ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
 done < <(echo "$src")
 
-git commit -m "Added mod $stash ($(basename "$ar"))";
+[ $stage -eq 1 ] && git commit -m "${commit_message:-Added mod $stash ($(basename "$ar"))}";
+[ $keep_mod -eq 0 ] && rm -rf "$stash"
 cd "$moddir"
