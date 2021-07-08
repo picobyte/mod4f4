@@ -1,5 +1,6 @@
 
-# mod4f4
+# mod4f4 v0.06
+
 A script to manage modules using git revision control and rsync.
 
 There are other management tools that are used more often, like vortex or mod organiser 2. If those work for you, try them instead. If not, this script provides a Linux commandline solution for manual packages manager with git revision control. In theory it could work on the mac OS x commandline, but may need adaptations because not all command work the same (I cannot test it but am interested).
@@ -108,18 +109,11 @@ As a last step, after the installation is done, run the Bodyslide steam executab
 ```Bash
  ## F4SE
 
-./mod4f4 --message="Name: Fallout 4 Script Extender
+./mod4f4 --subset="f4se_0_06_21/(Data|.*\.(exe|dll)|CustomControlMap.txt)" \
+        --message="Name: Fallout 4 Script Extender
 Author: ianpatt, behippo, plb
-Version/@MachineVersion: 0.6.21
 Version: 0.6.21
-Website: https://f4se.silverlock.org/
-
-### Nexus requirements
-
-Mod name | Notes
----|---
-
-" --subset="f4se_0_06_21/(Data|.*\.(exe|dll)|CustomControlMap.txt)" dnld/f4se_*.7z
+Website: https://f4se.silverlock.org/" dnld/f4se_*.7z
 ```
 
 The message displayed here is used to resolve dependencies. If available this is parsed from FOMod/info.xml. but F4SE is a bit different, it resides on a different site. Many modules depend on it, however.
@@ -130,8 +124,6 @@ The --subset=.. regular expression is required here to omit src/ and .txt files.
 ```Bash
 ## BodySlide [19-01-2021]
 ./mod4f4 dnld/"BodySlide and Outfit Studio"*.7z
- 
- # actually (again) the --subset=.. argument might be unneccesary (TODO: try without)
 ```
 
 Create a `BodySlide` launcher in steam, using target `BodySlide.exe` and start in<br>
@@ -139,6 +131,30 @@ Create a `BodySlide` launcher in steam, using target `BodySlide.exe` and start i
 Make sure to use proton experimental in the compatibility section.
 
 ```Bash
+## Looksmenu [04-11-2020] prereq: F4SE
+./mod4f4 dnld/LooksMenu\ v*.7z
+./mod4f4 dnld/BodyTalk3.15.7z
+
+cd f4/
+git branch CBBE
+git branch Fusion_Girl
+git checkout Fusion_Girl
+cd -
+
+./mod4f4 dnld/FG180REV1.7z
+
+./mod4f4 --message="Name: ZaZ -Extended-Skeleton (ZeX)
+Author: ZaZ
+Version: 4.0
+Website: https://www.nexusmods.com/fallout4/mods/36702" 'dnld/ZaZ - Extended Skeleton-36702-4-0-1606282622.7z'
+
+./mod4f4 --dest-base="" ./dnld/'xSE PluginPreloader F4 0.2.4-33946-0-2-4-1606749072.zip'
+./mod4f4 ./dnld/'Addres Library-47327-1-10-163-0-1599728753.zip'
+./mod4f4 ./dnld/'Buffout 4-47359-1-23-1-1623356612.zip'
+
+
+
+
 ## Enhanced Vanilla Bodies [18-02-2017]
 
 ./mod4f4 dnld/"Nude Female-"*.7z
