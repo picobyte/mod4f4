@@ -1,24 +1,36 @@
 #!/usr/bin/env bash
-# GPL 
+# mod4f4 v0.05
+# GPL v3
+
+
+
+# https://app.swaggerhub.com/apis-docs/NexusMods/nexus-mods_public_api_params_in_form_data/1.0#/
 
 [ -n "$DEBUG" ] && set -x
 
-usage="Usage: $0 [options..] <archive.7z|archive.rar|archive.zip> [rsync options..]
+usage="Usage: $0 --init | $0 --gitk | $0 [options..] <archive.7z|archive.rar|archive.zip> [rsync options..]
 
 Options:
-    --init: set up links and git revision control (no other arguments required).
+    --init      set up links and git revision control (no other arguments required).
 
-    --subset=<extended regular expression>  includes only the matching module (sub)directories.
+    --gitk      module management using gitk.
+
+    --subset=RE includes only the matching module (sub)directories.
 
                 Whether or not a directories trailing slash is included in the capture matters.
                 If uncaptured the directory is copied, otherwise the directory contents as rsync behaves.
 
-    --keep-mod: do not clean up the extracted module directory after commit.
-    --no-stage: don't stage and commit (allows manual staging). This implies --keep-mod.
+    --rm        remove the extracted module directory after commit.
+    --no-stage  don't stage and commit (allows manual staging). This implies --keep-mod.
                 Note that together with the --dry-run rsync option, no package contents are transferred.
                 The filename and directoryname case-insensitivity resolution is still run, though.
 
     --message=<string> commit with this specified message.
+
+    --ignore-nexus-reqs=RE      ignore a module's listed, but missing nexus requirements
+    --ignore-off-site-reqs=RE  ignore a module's listed, but potentially missing off-site requirements
+
+RE: extended regular expression
 
 for rsync options, see \`man rsync' or \`rsync --help'
 "
@@ -36,13 +48,13 @@ die() {
   warn "${1:-$usage}";
   exit ${2:-1}
 }
-
-requirements=
-for cmd in git 7z unrar unzip rsync perl sed bash sort uniq wc; do
+stash=
+console_requirements=
+for cmd in git 7z unrar unzip rsync perl sed sort uniq wc xml2 yad xmllint wget xrandr; do
   which $cmd &> /dev/null
-  [ $? -eq 0 ] || requirements="${requirements+\n}$cmd not found."
+  [ $? -eq 0 ] || console_requirements="${console_requirements+\n}$cmd not found."
 done
-[ -n "$requirements" ] && die "${requirements}\ninstall aforementioned on your system first"
+[ -n "$console_requirements" ] && die "${console_requirements}\ninstall aforementioned on your system first."
 
 # set up links to Fallout 4 if not already present
 if [ "$1" = "--init" ] || [ "$1" = "--init-no-check" ]; then
@@ -68,11 +80,18 @@ if [ "$1" = "--init" ] || [ "$1" = "--init-no-check" ]; then
     warn "Setting up revision control.. (takes a few minutes)" 1>&2
     git ls-files -o --exclude-standard | xargs -r -d "\n" -I {} git add "{}"
     git commit -m 'Clean Fallout 4 game'
-    cd -
+    cd - 2>/dev/null
   fi
   exit 0
 elif [ ! -e "$moddir/f4" ]; then
   die "run $0 --init to set up links and revision control (takes several minutes)."
+elif [ "$1" = "--gitk" ]; then
+  which gitk &> /dev/null
+  [ $? -eq 0 ] || die "gitk not found.\ninstall this on your system first or use commandline git commands instead."
+  cd f4/;
+  gitk&
+  cd - 2>/dev/null
+  exit 0
 fi
 
 # resolve file or directory name windows case-insensitivity duplicates by preserving the earliest tracked name
@@ -87,13 +106,21 @@ resolve_tracked_case_insensitivity_for_type() {
       snd_in_repo="$(git ls-files "$snd/")"
       if [ -n "$snd_in_repo" ]; then
         [ -n "$fst_in_repo" ] && die "both $first and $snd are tracked" 126
-        [ -d "$snd" ] && mv "$first"/* "$snd/" || mv "$first" "$snd";
+        if [ -d "$snd" ]; then
+          mv "$first"/* "$snd/"
+        elif [ -f "$first" ]; then
+          mv "$first" "$snd";
+        fi
         first="$snd"
       else
         [ -z "$fst_in_repo" ] && echo "neither $first nor $snd tracked, just using first" 1>&2
-        [ -d "$snd" ] && mv "$snd"/* "$first/" || mv "$snd" "$first"
+        if [ -d "$snd" ]; then
+          mv "$snd"/* "$first/"
+        elif [ -f "$snd" ]; then
+          mv "$snd" "$first"
+        fi
       fi
-      rmdir --ignore-fail-on-non-empty "$snd/"
+      [ -d "$snd/" ] && rmdir --ignore-fail-on-non-empty "$snd/"
     else
       first="$snd"
     fi
@@ -104,19 +131,25 @@ resolve_tracked_case_insensitivity_for_type() {
 # whether or not you capture the trailing directory slash with --subset regexp matterd.
 # if uncaptured the directory is copied, otherwise the directory contents.
 
-keep_mod=0
+keep_mod=1
 stage=1
-commit_message=
-dest=Data/
+append_message=
+dest_base=Data/
+ignore_nexus_reqs=
+ignore_off_site_reqs=
 re="[^ ][^/]*"
 while [ $# -ne 0 ] ;do
   case "$1" in
-    --subset=*) re="${1:10}";;
+    --subset=*) re="${1:9}";;
     --subset) shift; re="$1";;
-    --keep-mod) keep_mod=1;;
+    --rm) keep_mod=0;;
     --no-stage) stage=0;;
-    --message=*) commit_message="${1:11}";;
-    --message) shift; commit_message="$1";;
+    --ignore-nexus-reqs=*) ignore_nexus_reqs="${1:20}";;
+    --ignore-nexus-reqs) shift; ignore_nexus_reqs="$1";;
+    --ignore-off-site-reqs=*) ignore_off_site_reqs="${1:24}";;
+    --ignore-off-site-reqs) shift; ignore_off_site_reqs="$1";;
+    --message=*) append_message="${1:10}";;
+    --message) shift; append_message="$1";;
     --*) die "$usage\nError: unrecognized option $1 (rsync options come after the mod archive)";;
     *) break;;
   esac
@@ -128,35 +161,42 @@ shift
 [ -e "$ar" ] || die "${usage}\nError: No archive: '$ar'"
 
 case "${ar##*.}" in
-  7z) uz="7z ";;
+  7z)  uz="7z ";;
   zip) uz="unzip -";;
   rar) uz="unrar ";;
   *) echo "unrecognized extension for $ar, is it an archive?" 1>&2;
      exit 1;;
 esac
 # all list files between these markers
-src="$(${uz}l "$ar" | sed -n -r "/^---/,/^---/{/^---/!s~^.*  ($re)(.*)?$~\1~p}" | uniq)"
 
-[ -z "$src" ] && die "$re matches no files in $ar"
-stash="$(basename "${ar%.*}")"
+dirs="$(${uz}l "$ar" | sed -n -r '/^---/,/^---/{/^---/b;s~^.*  ([^ ].*)$~\1~p}' | sed -n -r "s~^($re)(.*)?$~\1~p" | uniq)"
+
+[ -z "$dirs" ] && die "regular expression '$re' matches no files in archive '$ar'"
+
+
+bn="$(basename "${ar%.*}")"
 
 if [[ $re =~ ^([^][(){}\\]|\\.)+(/|$) ]]; then
   stash="${re%%/*}"
   [ ! -d "$stash" ] && ${uz}x "$ar"
   find -H f4/ -mount -maxdepth 1 | grep -i -q -w -f <(ls -1 "$stash")
   [ $? -eq 0 ] && dest=""
-elif [ $(echo "$src" | wc -l) -ne 1 ]; then
-  src="$(echo "$src" | sed -r "s~^~$stash/~")"
+elif [ $(echo "$dirs" | grep -vi "^fomod$" | wc -l) -ne 1 ]; then # fomod/ is not a useful dirname for extraction either
+  stash="$bn"  
+  dirs="$(echo "$dirs" | sed -r "s~^~$stash/~")"
 else
-  nest="$(find -H f4/ -mount -maxdepth 2 -type d -iname "$src" | perl -e 'print sort { length($a) <=> length($b) } <>' | head -n 1)"
+  # extraction dir, contained in archive
+  nest="$(find -H f4/ -mount -maxdepth 2 -type d -iname "$dirs" | perl -e 'print sort { length($a) <=> length($b) } <>' | head -n 1)"
 
   case "$nest" in
-    f4/*/*) dest="$(dirname "${nest#f4/}")"
-            src="$(echo "$src" | sed -r "s~^~$stash/~")";;
-    f4/*) dest=""
-          src="$(echo "$src" | sed -r "s~^~$stash/~")";;
-    "") stash="$src"
-        [ "$re" = "[^ ][^/]*" ] && src="$(${uz}l "$ar" | sed -n -r "/^---/,/^---/{/^---/!s~^.*  ($src/$re)(.*)?$~\1~p}" | uniq)";;
+    f4/*/*) dest_base="$(dirname "${nest#f4/}")"
+            stash="$bn"  
+            dirs="$(echo "$dirs" | sed -r "s~^~$stash/~")";;
+    f4/*)   dest_base=""
+            stash="$bn"  
+            dirs="$(echo "$dirs" | sed -r "s~^~$stash/~")";;
+    "")     stash="$dirs"
+        [ "$re" = "[^ ][^/]*" ] && dirs="$(${uz}l "$ar" | sed -n -r "/^---/,/^---/{/^---/b;s~^.*  ($dirs/$re)(.*)?$~\1~p}" | uniq)";;
   esac
 fi
 
@@ -168,21 +208,287 @@ else
   keep_mod=1
 fi
 
+# TODO: adult mods may require an apikey. Registration needs to be done
+# https://help.nexusmods.com/article/114-api-acceptable-use-policy
+# Application-Version (e.g. "0.05") 	Please ensure this reflects the current release.
+# Application-Name (eg. "mod4f4")
+
+# a fomod dir is always nested.
+fomod_dir="$(echo "$dirs" | grep -i "^$stash/fomod$" | uniq)"
+
+# below is for parsing the fomod moduleConfig.xml
+
+sources=()
+dests=()
+mod_reqs=
+commit_message=
+adult_mod_stub="This mod contains adult content. You can turn adult content on in your"
+
+if [ -n "$fomod_dir" ]; then
+  dest_base="Data/"
+  commit_message="$(find "$fomod_dir" -maxdepth 1 -type f -iname "info.xml" -exec cat {} \; |xml2|
+      sed -n -r 's~^/fomod/([^=]+)=~\1: ~;/Description: /!p')"
+
+  mod_url="$(echo "$commit_message" | sed -n 's/^Website: //p')"
+
+else
+  mod_nr="$(basename "${ar%.*}" | tr -c -s "[0-9.]" "\n" | egrep "^[0-9]{1,5}$")"
+  echo "'$mod_nr'"
+  if [ $(echo "$mod_nr" | wc -l) -ne 1 ]; then
+    mod_nr="$(echo "$mod_nr" | sort -rg | sed '1{s/^/TRUE /;b};s/^/FALSE /' | xargs yad --title="Select module number.." --list \
+        --width=640 --height=480\
+        --text="Please indicate the module number:" --list --radiolist --column=selection:RD --column=number:NUM)"
+    [ $? -eq 0 ] && mod_url="http://www.nexusmods.com/fallout4/mods/$(echo "${mod_nr}" |tr -c -d "[:digit:]")/"
+  fi
+fi
+[ -n "$mod_url" ] && [ ! -e "${bn}.info" ] && wget -O- "$mod_url" | html2text > "${bn}.info"
+
+if [ -e "${bn}.info" ] && [ -n "$(grep "$adult_mod_stub" "${bn}.info")" ]; then
+  yad --title="What the hack download.." --width=640 --height=480 \
+  --text="<span foreground='white' font='18'>Adult mod, open url below in browser, save as html in /tmp Make sure to save as html!</span>" \
+  --form --field="$mod_url:LINK" "$mod_url"
+  if [ $? -eq 0 ]; then
+    html="$(ls -1rt /tmp/*.html | tail -n 1)"
+    cat "$html" | html2text > "${bn}.info"
+    # rm "$html"
+  fi
+fi
+if [ -z "$commit_message" ]; then
+  commit_message="$(sed -n -r '/^# Please log in or register/b
+  s/^# /Name: /p;
+/^### Created by/{n;n;s/^/Author: /p};
+/^  \* Version/{n;n;s~(.*)$~Version/@MachineVersion: \1\nVersion: \1~p}' "${bn}.info")
+Website: $mod_url"
+  if [ -z "$(echo "$commit_message" | grep "Author: ")" ]; then
+    rm "${bn}.info"
+    commit_message=
+  fi
+fi
+if [ -n "$(grep "$adult_mod_stub" "${bn}.info")" ]; then
+
+  mod_reqs="$(sed -n -r '/^###(Nexus|Off-site|DLC) requirements/{N;:a;N;/\n$/!ba;s/[ \t]+(\n|$)//g;p}' "${bn}.info")"
+  warn "This module has the requirements:"
+  while read url name; do
+    if [ "${url:0:27}" = "https://www.nexusmods.com/" ]; then
+      commit="$(git log -E --grep "^   (Website: $url|Name: $name)$")"
+      [ -z "$commit" ] && [ -n "$(echo "$name" | egrep "$ignore_nexus_reqs")" ] &&
+          die "Nexus requirement $name is not yet installed (use --ignore-nexus-reqs=RE to ignore this)"
+    else
+      apropos $name
+      [ $? -ne 0 ] && [ -n "$(echo "$name" | egrep "$ignore_off_site_reqs")" ] &&
+          die "Off-site requirement $name may not yet be installed (use --ignore-off-site-reqs=RE to ignore this)"
+    fi
+  done < <(echo "$mod_reqs" | sed -n -r 's~^\[(.*)\]\((https?://.*)\) \|  $~\2 \1~p')
+fi
+if [ -n "$fomod_dir" ]; then
+  TAG_NAME=
+  ATTRIBUTES=
+  read_dom () {
+      local IFS=\>
+      read -r -d \< ENTITY CONTENT
+      local ret=$?
+      if [ "${ENTITY:0:8}" = '![CDATA[' ]; then
+        TAG_NAME="?cdata"
+        ATTRIBUTES="${ENTITY:8:$((${#ENTITY}-10))}"
+      elif [ -n "${ENTITY#* *}" ]; then
+        TAG_NAME="${ENTITY%% *}"
+        ATTRIBUTES="${ENTITY#* }"
+      else
+        TAG_NAME=
+        ATTRIBUTES=
+      fi
+      return $ret
+  }
+  
+  attr() {
+      echo -E "${ATTRIBUTES}" | sed -r "s~^.*$1=\"([^\"]*)\".*$~\1~"
+  }
+  flags=
+  nesting=
+  yad_rows=0
+  yad_cols=()
+  yad_general_args=(--button=yad-ok)
+  while read_dom; do
+    if [ "${TAG_NAME:0:1}" = '/' ]; then
+      nesting="${nesting%${TAG_NAME}}"
+    elif [ "${ATTRIBUTES:$((${#ATTRIBUTES}-1)):1}" != "/" ] && [ "${TAG_NAME:0:1}" != '?' ]; then
+      nesting="${nesting}/${TAG_NAME}"
+    fi
+    [ -z "${nesting%*/config*}" ] && continue
+    case "$TAG_NAME" in
+        moduleName) yad_general_args[${#yad_general_args[@]}]="--title=$CONTENT";;
+        moduleImage) yad_general_args[${#yad_general_args[@]}]="--image=$stash/$(attr "path" | sed 'y~\\~/~')";;
+        description) description[$yad_rows]="$(echo "$CONTENT" | sed -r '1{:a;s/^\n?[ \t]+//;/^$/{N;ba}};/&#xD;/{N;s/&#xD;\n//}')";;
+        \?cdata) description[$yad_rows]="${description[$yad_rows]}$ATTRIBUTES";;
+        image) preview=--button=Preview:66
+          image="$stash/$(attr "path" | sed 'y~\\~/~')";;
+        folder|file)
+          src="$(attr "source" | sed 'y~\\~/~')"
+          [ "$src" = "== Installer ==" ] && yad_opt_args[0]="TRUE"
+
+          if [ -z "${nesting%%*/requiredInstallFiles}" ]; then
+            [ "$TAGNAME" = "folder"] && sources[${#sources[@]}]="$stash/$src/" || sources[${#sources[@]}]="$stash/$src"
+            dests[${#dests[@]}]="$(attr "destination" | sed 'y~\\~/~')"
+          elif [ -z "${nesting%*/config/conditionalFileInstalls/*}" ]; then
+            if [ $res -eq 1 ]; then
+              [ "$TAGNAME" = "folder"] && sources[${#sources[@]}]="$stash/$src/" || sources[${#sources[@]}]="$stash/$src"
+              dests[${#dests[@]}]="$(attr "destination" | sed 'y~\\~/~')"
+            fi
+          else
+            # no $stash yet because it is a selection option.
+            [ -n "${plugin_srcs[$yad_rows]}" ] && plugin_srcs[$yad_rows]="${plugin_srcs[$yad_rows]}#"
+            plugin_srcs[$yad_rows]="${plugin_srcs[$yad_rows]}$stash/$src"
+            [ -n "${plugin_dests[$yad_rows]}" ] && plugin_dests[$yad_rows]="${plugin_dests[$yad_rows]}#"
+            plugin_dests[$yad_rows]="${plugin_dests[$yad_rows]}$dest_base$(attr "destination" | sed 'y~\\~/~')"
+          fi
+          ;;
+        flag)
+          if [ -z "${nesting%%*/conditionFlags/flag}" ]; then
+            [ $yad_rows -eq 0 ] && yad_cols[${#yad_cols[@]}]=--column=cond:HD
+            fl="$(attr "name")"
+            yad_opt_args[${#yad_opt_args[@]}]="$fl:$CONTENT"
+          fi;;
+        #type) type="$(attr "name")";;
+        group)
+          preview=
+          type=$(attr "type")
+          yad_args=()
+          description=()
+          yad_before=("--text-align=center" '--text=<span foreground="white" font="32">'"$(attr "name")</span>")
+          case $type in
+              SelectExactlyOne) yad_cols=("--column=sel:RD");  yad_before[2]=--radiolist;;
+              SelectAtMostOne)  yad_cols=("--column=sel:CHK"); yad_before[2]=--checklist; yad_before[3]="-q-limit=1";;
+              SelectAny)        yad_cols=(--column=sel:CHK);   yad_before[2]=--checklist;;
+            *) echo "FIXME: not yet supported fomod group type: '$type'" 1>&2;;
+          esac;;
+        /group)
+          [ $((${#yad_args[@]} % ${#yad_cols[@]})) -ne 0 ] && die "$((${yad_args[@]}\n\n\n${yad_cols[@]}))"
+          [ ${#yad_cols[@]} -eq ${#yad_args[@]} ] && yad_args[0]="TRUE"
+          while [ 1 ]; do
+            opt_sources=()
+            selection="$(yad "${yad_general_args[@]}" $preview --button=info:42 --always-print-result \
+                --list "${yad_before[@]}" "${yad_cols[@]}" "${yad_args[@]}")"
+            res=$?
+            for i in `seq 0 $((${#yad_cols[@]}-1))`; do
+              value="$(echo "$selection" | cut -d "|" -f $((i+1)))"
+              case ${yad_cols[$i]:9} in
+                cond:HD)cond_col=$i;conds="$value";;
+                name:TEXT)          names="$value";;
+                desc:HD)            infos="$value";;
+                img:HD)              imgs="$value";;
+                nr:HD)                nrs="$value";;
+              esac
+            done
+            case $res in
+             66|42)
+                 ncols=${#yad_cols[@]}
+                 if [ $res -eq 66 ]; then
+                   while read name pic; do
+                     if [ -e "$pic" ]; then
+                       yad --fullscreen --title="${name//_/ }" --image="$pic"
+                       [ $? -eq 1 ] && break;
+                     else
+                       warn "No image: $pic"
+                     fi
+                   done < <(paste <(echo "$names" | tr " " "_") <(echo "$imgs"))
+                 else
+                   for n in ${nrs[@]}; do
+                     echo "${description[$n]}" | yad --text-info --wrap --width=1024 --height=768 --title="${names[$((n*ncols+1))]}"
+                     [ $? -eq 1 ] && break;
+                   done
+                 fi
+                 if [ $ncols -eq ${#yad_args[@]} ]; then
+                   yad_args[0]="TRUE"
+                 else
+                   n=0;
+                   while [ $n -lt ${#yad_args[@]} ]; do
+                     yad_args[$n]="FALSE"
+                     n=$((n+ncols))
+                   done
+                   j=0
+                   for i in ${nrs[@]}; do
+                     n=$((i*ncols))
+                     yad_args[$n]="TRUE"
+                   done
+                 fi;;
+              0) break;;
+              *) die "You chose quit.";;
+            esac
+          done
+          while read fl; do
+            [ -z "${fl%%*:On}" ] && flags="$flags ${fl%:On}" || flags="$(echo "$flags" | sed -n -r "s/(^| )${fl%:Off}($| )/\1\2/")";
+          done < <(echo "$conds")
+
+          for i in ${nrs[@]}; do
+            n=$((i*ncols))
+            while read s; do
+              sources[${#sources[@]}]="$s"
+            done  < <(echo "${plugin_srcs[$n]}" | tr "#" "\n") 
+            while read d; do
+              dests[${#dests[@]}]="$d"
+            done  < <(echo "${plugin_dests[$n]}" | tr "#" "\n")
+          done
+          yad_rows=0;;
+        plugin)  [ $yad_rows -eq 0 ] && yad_cols[${#yad_cols[@]}]=--column=name:TEXT
+                 plugin_srcs=
+                 plugin_dests=
+                 image=
+                 yad_opt_args=("FALSE" "$(attr "name")");;
+        /plugin) if [ $yad_rows -eq 0 ]; then
+                   yad_cols[${#yad_cols[@]}]=--column=nr:HD
+                   [ -n "$preview" ] && yad_cols[${#yad_cols[@]}]=--column=img:HD
+                 fi
+                 yad_args=("${yad_args[@]}" "${yad_opt_args[@]}" $yad_rows "$image")
+                 yad_rows=$((yad_rows+1));;
+        pattern) res=1;;
+        flagDependency)
+          flag="$(attr "flag")"
+          if [ -z "$(echo "$flags" | egrep "(^| )$flag( |$)")" ]; then
+            res=0
+          fi;;
+    esac
+  done < <(find "$fomod_dir" -nowarn -maxdepth 1 -type f -iname "ModuleConfig.xml" -exec xmllint {} \;)
+fi
+if [ ${#sources[@]} -eq 0 ]; then
+  while read d; do
+    if [ -z "$fomod_dir" ] || [[ ! "$d" =~ ^$fomod_dir ]]; then
+      sources[${#sources[@]}]="$d"
+      dests[${#dests[@]}]="$dest_base"
+    fi
+  done < <(echo "$dirs")
+fi
+#yad --width=1024 --height=768 --list --no-click '--text=<span foreground="white" font="24">folders to be transferred:</span>' \
+#    --no-selection --column=Name "${sources[@]}"
+#[ $? -ne 0 ] && die "You chose quit"
 cd "$moddir/f4"
 exclude_git=
-[ -z "$dest" ] && exclude_git='--exclude="f4/.git*"'
+[ -z "$dest_base" ] && exclude_git='--exclude="f4/.git*"'
 
-while read d; do
+[ ${#sources[@]} -ne ${#dests[@]} ] && die "inconsistent number of sources and destinations for transfer"
 
-  echo from `pwd` rsync --safe-links -rlptgov $exclude_git "$@" "$moddir/$d" "$dest"
-  rsync --safe-links --prune-empty-dirs -rlptgov $exclude_git "$@" "$moddir/$d" "$dest"|| { cd "$moddir"; exit 2;}
+transfer_selection= 
+for i in `seq 0 $((${#sources[@]}-1))`; do
+  src="${sources[$i]}"
+  tgt="${dests[$i]}"
+
+  [ -z "$src" ] && continue
+  [ -n "$(echo "${transfer_selection}" | grep "$src")" ] && continue
+  transfer_selection="${transfer_selection:-Selected for transfer:}
+$src"
+
+  rsync --safe-links --prune-empty-dirs -rlptgo $exclude_git "$@" "$moddir/$src" "$tgt" || { cd "$moddir"; exit 2;}
 
   until resolve_tracked_case_insensitivity_for_type d; do :; done
   resolve_tracked_case_insensitivity_for_type f
 
   [ $stage -eq 1 ] && git ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
-done < <(echo "$src")
-
-[ $stage -eq 1 ] && git commit -m "${commit_message:-Added mod $stash ($(basename "$ar"))}";
+done
+# if it's just everything, no need to list explicitly in commit message
+[ -z "$fomod_dir" ] && transfer_selection=
+[ $stage -eq 1 ] && git commit -q -m "${commit_message}
+Archive: $(basename "$ar")
+$append_message
+$mod_reqs
+$transfer_selection";
 [ $keep_mod -eq 0 ] && rm -rf "$stash"
 cd "$moddir"
