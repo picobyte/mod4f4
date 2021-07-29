@@ -1,0 +1,3 @@
+[submodule "FOModXML"]
+	path = FOModXML
+	url = https://git.sr.ht/~rjck/FOModXML

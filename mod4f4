@@ -5,7 +5,7 @@
 
 
 # https://app.swaggerhub.com/apis-docs/NexusMods/nexus-mods_public_api_params_in_form_data/1.0#/
-
+set -e
 [ -n "$DEBUG" ] && set -x
 
 usage="Usage: $0 --init | $0 --gitk | $0 [options..] <archive.7z|archive.rar|archive.zip> [rsync options..]
@@ -45,17 +45,17 @@ DLC="Coast NukaWorld Robot UltraHighResolution workshop"
 game_version=1.10.163.0.0
 
 warn() {
-  echo -e "$1\n" 1>&2;
+  echo -e "$1" 1>&2;
 }
 
 die() {
-  warn "from `pwd`:\n${1:-$usage}";
+  warn "from `pwd`:$(caller)\n${1:-$usage}";
   cd "$mod_root"
   exit ${2:-1}
 }
 stash=
 console_requirements=
-for cmd in git rsync sed sort uniq wc xml2 yad xmllint wget; do
+for cmd in tidy git rsync sed sort uniq wc xml2 yad xmllint wget; do
   which $cmd &> /dev/null
   (( $? == 0 )) || console_requirements="${console_requirements+\n}$cmd not found."
 done
@@ -71,6 +71,12 @@ if [ "$1" = "--init" ] || [ "$1" = "--init-no-check" ]; then
     f4="${STEAM_LIBRARY}/SteamApps/common/Fallout 4"
     [ -d "$f4" ] || die "You don't seem to have Fallout 4 installed in '$f4'"
     ln -s "$f4" f4
+  fi
+  if [ ! -d FOModXML ]; then
+      git submodule init
+      cd FOModXML
+      target build --release
+      cd -
   fi
 
   if [ ! -d "$mod_root/f4/.git" ]; then
@@ -136,6 +142,18 @@ resolve_tracked_case_insensitivity_for_type() {
   return 1 # ok, repeat.
 }
 
+# installStep=(printf "%s\n" "${installStepNames[@]}" | nl -v 0 | sort -k 2 | cut -f 1 | _reorder "${installStep[@]}")
+
+_order_fn() {
+    case $1 in
+        Ascending) echo "nl -v0|sort -k2|cut -f1";;
+        Descending) echo "nl -v0|sort -rk2|cut -f1";;
+        Explicit);;
+        *) die "$1..? $(caller)";;
+    esac
+}
+
+
 # whether or not you capture the trailing directory slash with --subset regexp matterd.
 # if uncaptured the directory is copied, otherwise the directory contents.
 
@@ -192,7 +210,7 @@ stash="${re%%/*}"
 if [ -z "$(echo "$ar_dirs" | egrep -v "^$stash/" 2>&1)" ] &&
     [ -z "$(find -H f4/ -mount -type d -iname "$stash")" ]; then
   warn "package contained installer directory '$stash'/\nonly extracting seleced with '${re}'"
- 
+
   [ -d "$stash" ] && keep_mod=1 || ${uz}x "$ar" "$stash" || die "..that was \`${uz}x $ar \"$stash\"' that failed." 2
 
   find -H f4/ -mount -maxdepth 1 | grep -i -q -w -f <(ls -1 "$stash")
@@ -223,19 +241,30 @@ readme=()
 fomod_dir=
 fomod_info=
 fomod_config=
-while read f; do
-  [ -e "$f" ] || die "$ar: $f does not exist?"
-  [ -n "$(echo "$f" |egrep -i "^([^/]+/)?fomod$")" ] && fomod_dir="$f"
-  [ -n "$(echo "$f" |egrep -i "^([^/]+/)?fomod/info.xml$")" ] && fomod_info="$f"
-  [ -n "$(echo "$f" |egrep -i "^([^/]+/)?fomod/ModuleConfig.xml$")" ] && fomod_config="$f"
-  [ -n "$(echo "$f" |egrep -i "^([^/]+/)?[^/]*readme\.txt$")" ] && readme[${#readme[@]}]="$f"
-done < <(echo "$ar_files")
+
+if [[ $DEBUG > 0 ]];then
+    echo "$ar_files" | xargs -d "\n" parallel -n 1 -j $(getconf _NPROCESSORS_ONLN) \
+    '[ -e "{1}" ] || echo "$f does not exist" && false' ||
+    die "$ar not entirely extracted (then remove folder first)?"
+fi
+
+for f in $(echo "$ar_files" | egrep -i "^'?([^/]+/)?(fomod(/(info|ModuleConfig).xml)?|[^/]*readme\.txt)'?$"); do
+  case "$(echo "$f" | tr "[:upper:]" "[:lower:]")" in
+    *fomod) fomod_dir="$f";;
+    *fomod/info.xml) fomod_info="$f";;
+    *fomod/moduleconfig.xml) fomod_config="$f";;
+    *readme.txt) readme[${#readme[@]}]="$f";;
+    *) die "$f"
+  esac
+done
 
 # TODO: adult mods may require an apikey. Registration needs to be done
 # https://help.nexusmods.com/article/114-api-acceptable-use-policy
 # Application-Version (e.g. "0.05") Please ensure this reflects the current release.
 # Application-Name (eg. "mod4f4")
 
+
+### certain files can change, Active, Inactive, git may notice the changes.
 
 # below is for parsing the fomod moduleConfig.xml
 
@@ -246,7 +275,10 @@ commit_message=
 
 if [ -f "$fomod_info" ]; then
 
-  commit_message="$(xml2 < "$fomod_info"| sed -n -r 's~^/fomod/([^=]+)=~\1: ~;/Description: /!p')"
+  fomod_info_extract="$(xml2 < "$fomod_info")"
+  fomod_info_description="$(echo "$fomod_info_extract" | sed -n -r 's~^/fomod/Description=~~p')"
+  commit_message="$(echo "$fomod_info_extract" | sed -n -r 's~^/fomod/([^=]+)=~\1: ~;/Description: /!p')"
+
   mod_url="$(echo "$commit_message" | sed -n 's/^Website: //p')"
 
 elif [ -z "$append_message" ]; then
@@ -306,321 +338,59 @@ Website: $mod_url"
     done < <(echo "$mod_reqs" | sed -n -r 's~^\[(.*)\]\((https?://.*)\) \|  $~\2 \1~p')
   fi
 fi
-
-if [ -f "$fomod_config" ]; then
-  TAG_NAME=
-  ATTRIBUTES=
-  read_dom () {
-      local IFS=\>
-      read -r -d \< ENTITY CONTENT
-      local ret=$?
-      if [ "${ENTITY:0:8}" = '![CDATA[' ]; then
-        TAG_NAME="?cdata"
-        ATTRIBUTES="${ENTITY:8:$((${#ENTITY}-10))}"
-      elif [ -n "${ENTITY#* *}" ]; then
-        TAG_NAME="${ENTITY%% *}"
-        ATTRIBUTES="${ENTITY#* }"
-      else
-        TAG_NAME=
-        ATTRIBUTES=
-      fi
-      return $ret
-  }
-  vercomp () {
-    [[ $1 == $2 ]] && return 0
-    local IFS=.
-    local i ver1=($1) ver2=($2)
-    # fill empty fields in ver1 with zeros
-    for ((i=${#ver1[@]}; i<${#ver2[@]}; i++)); do
-        ver1[i]=0
-    done
-    for ((i=0; i<${#ver1[@]}; i++)); do
-        # fill empty fields in ver2 with zeros
-        [[ -z ${ver2[i]} ]] && ver2[i]=0
-        ((10#${ver1[i]} > 10#${ver2[i]})) && return 1
-        ((10#${ver1[i]} < 10#${ver2[i]})) && return 2
-    done
-    return 0
-  }
-  attr() {
-    echo -E "${ATTRIBUTES}" | sed -r "s~^.*$1=\"([^\"]*)\".*$~\1~;t;s/^.*$/$2/"
-  }
-  path() {
-    path="$(attr "$1" | sed 'y~\\~/~')"
-    if [ "$1" = "source" ]; then
-      path="$(echo "$ar_files" | grep -i "^$path$")"
-      [ ! -e "$path" ] && die "$path not found (nor its case mismatches)"
-      echo "$path"
-    elif [ -n "$2" ]; then
-      find "$mod_root/$2" -iwholename "$path"
-    else
-      find ./ -iwholename "./$path" || echo "$path"
-    fi
-  }
-  yad_get_plug() {
-    local plug=${RANDOM}
-    while [ -n "$(lsipc -m | grep "[-]-key=$plug")" ]; do
-      plug=${RANDOM}
-    done
-    echo "$plug"
-  }
-  yad_notebook() {
-    local tabs=()
-    local plug=$(yad_get_plug | tee /dev/stderr)
-    local dims=
-    case $1 in
-      images)
-        for i in `seq 0 $2`; do
-          local img="${previewImage[$i]}"
-          [ -z "$img" ] && continue;
-          yad --plug=$plug --tabnum=$((i+1)) --image="$img" &>/dev/null&
-          tabs[${#tabs[@]}]="--tab=${pluginName[$i]}"
-        done;;
-      info) dims='--width=1024 --height=768'
-        for i in `seq 0 $2`; do
-          local desc="${description[$i]}"
-          [ -z "$desc" ] && continue;
-          echo "$desc" | yad --plug=$plug --tabnum=$((i+1)) --text-info --wrap &>/dev/null&
-          tabs[${#tabs[@]}]="--tab=${pluginName[$i]}"
-        done;;
-    esac
-    [ ${#tabs[@]} -ne 0 ] && yad $dims --notebook --key=$plug "${tabs[@]}" || warn "No $1"
-  }
-  flags=
-  nesting=
-  yad_rows=0
-  yad_general_args=(--button=yad-ok)
-  while read_dom; do
-    if [ "${TAG_NAME:0:1}" = '/' ]; then
-      nesting="${nesting%${TAG_NAME}}"
-    elif [ "${ATTRIBUTES:$((${#ATTRIBUTES}-1)):1}" != "/" ] && [ "${TAG_NAME:0:1}" != '?' ]; then
-      nesting="${nesting}/${TAG_NAME}"
-    fi
-    [ -z "${nesting%*/config*}" ] && continue
-    case "$TAG_NAME" in
-        moduleName) yad_general_args[${#yad_general_args[@]}]="--title=$CONTENT";;
-        moduleImage) yad_general_args[${#yad_general_args[@]}]="--image=$(path "path")";;
-        moduleDependencies)
-            operator=$(attr "operator" "And");
-            case operator in
-              Or) condition=0;;
-              And) condition=1;;
-            esac;;
-        gameDependency) target_version ="$(attr "version")"
-            vercomp $game_version  $target_version
-            (( $? == 2 )) && [[ $operator == And ]] &&
-                die "Game version is $game_version but $target_version is required.";;
-        fileDependency) f="$(path "file" "f4/$dest_base")"
-            state="$(attr "state")"
-            [ "$state" = "Active" ] && warn "fileDependency: '$(path "file")' resolved to '$f'" 
-            case "$operator:$condition:$state:$f" in
-                Or:0:Inactive:|And:1:Inactive:);;
-                Or:0:Active:|Or:0:Inactive:*) condition=1;;
-                And:1:Active:|And:1:Inactive:*) condition=0;;
-            esac;;
-        flagDependency)
-          echo "$flags" | egrep -q "'$(attr "flag"):$(attr "value")'"
-          res=$?
-          if [ -z "$flagDependency" ]; then
-            flagDependency=$res
-          else
-            warn "file before flagDependency check (untested branch)"
-            if (( $res == 0 )); then
-              while read src_dest; do
-                sources[${#sources[@]}]="${src_dest%|*}"
-                dests[${#dests[@]}]="${src_dest#*|}"
-              done < <(echo "$flagDependency" | tr "#" "\n")
-            fi
-          fi;;
-        /moduleDependencies)
-            case operator in
-              Or)  (( $condition != 1 )) && die 'module "Or" requirements not met!';;
-              And) (( $condition != 1 )) && die 'module "And" requirements not met!';;
-            esac;;
-        installSteps) plug=$RANDOM;
-            installStepName=()
-            installStepOrder="$(attr "order" "Ascending")";;
-        /installSteps)
-            # TODO:
-            #yad --plug=$plug --tabnum=1 --text="first tab with text" &> res1 &
-            #yad --plug=$plug --tabnum=2 --text="second tab" --entry &> res2 &
-            #case installStepOrder in
-            #    Ascending) tabs=$(echo "${tabs[@]}" | tr " " "\n" | nl | sort -k 2 |
-            #        cut -f 1 | sed -r 's/^ +([0-9]+)$/--tab="tab \1"/');;
-            #    Descending) tabs=$(echo "${tabs[@]}" | tr " " "\n" | nl | sort -r -k 2 |
-            #        cut -f 1 | sed -r 's/^ +([0-9]+)$/--tab="tab \1"/');;
-            #esac
-            #yad --notebook --key=$plug "${tabs[@]}"
-            ;;
-        installStep) installStepName[${#installStepName[@]}]="$(attr "name")";;
-        /installStep);;
-
-        optionalFileGroups) groupName=()
-            optionalFileGroupOrder="$(attr "order" "Ascending")";;
-        plugins)
-            pluginName=()
-            pluginOrder="$(attr "order" "Ascending")";;
-        description) description[$yad_rows]="$(echo "$CONTENT" |
-            sed -r '1{:a;s/^\n?[ \t]+//;/^$/{N;ba}};/&#xD;/{N;s/&#xD;\n//;s/&#xD;//}')";;
-        \?cdata) description[$yad_rows]="${description[$yad_rows]}$ATTRIBUTES";;
-        image) preview=--button=Preview:66
-          previewImage[$yad_rows]="$(path "path")";;
-        folder|file)
-          src="$(path "source")"
-          # with slash directory contents are rsynced, not directory itself.
-          [ "$TAG_NAME" = "folder" ] && src="$src/"
-          #//!--/config/conditionalFileInstalls/patterns/pattern/files
-
-          dest="$(path "destination")"
-          if [ -z "${nesting%%*/requiredInstallFiles}" ]; then
-            sources[${#sources[@]}]="$src"
-            dests[${#dests[@]}]="$dest"
-          elif [ -n "$(echo "$nesting" | grep "/conditionalFileInstalls/")" ]; then
-            if [ "$flagDependency" = "0" ]; then # this is a grep -q result; 0 means succes.
-              sources[${#sources[@]}]="$src"
-              dests[${#dests[@]}]="$dest"
-            elif [ "$flagDependency" != "1" ]; then
-              [ -n "${flagDependency}" ] && flagDependency="${flagDependency}#"
-              flagDependency="${flagDependency}$src|$dest"
-            fi
-          else
-            [ -n "${plugin_srcs[$yad_rows]}" ] && plugin_srcs[$yad_rows]="${plugin_srcs[$yad_rows]}#"
-            plugin_srcs[$yad_rows]="${plugin_srcs[$yad_rows]}$src"
-            [ -n "${plugin_dests[$yad_rows]}" ] && plugin_dests[$yad_rows]="${plugin_dests[$yad_rows]}#"
-            plugin_dests[$yad_rows]="${plugin_dests[$yad_rows]}$dest"
-          fi
-          ;;
-        flag)
-          if [ -z "${nesting%%*/conditionFlags/flag}" ]; then
-            (( $yad_rows == 0 )) && yad_cols="$yad_cols cond:HD"
-            yad_args="$yad_args$(attr "name"):$CONTENT	"
-          fi;;
-        #type) type="$(attr "name")";;
-        group)
-          yad_args=
-          preview=
-          type=$(attr "type")
-          description=()
-          previewImage=()
-          yad_before=("--text-align=center" '--text=<span foreground="white" font="32">'"$(attr "name")</span>")
-          case $type in
-              SelectExactlyOne) yad_cols=" sel:RD"; yad_before[2]=--radiolist;;
-              SelectAtMostOne)  yad_cols=" sel:CHK"; yad_before[2]=--checklist;
-                  yad_before[3]="--limit=1";;
-              SelectAny)        yad_cols=" sel:CHK";  yad_before[2]=--checklist;;
-            *) echo "FIXME: not yet supported fomod group type: '$type'" 1>&2;;
-          esac;;
-        /group)
-          ncols=$(echo "$yad_cols" | tr -c -d " " | wc -c)
-          nargs=$(echo "$yad_args" | tr -c -d "\t" | wc -c)
-          (( $(($nargs % $ncols)) != 0 )) && die "${yad_args//	/ }\n\n\n$yad_cols"
-          while [ 1 ]; do
-            opt_sources=()
-            selection="$(yad "${yad_general_args[@]}" $preview --button=info:42 --always-print-result \
-                --list "${yad_before[@]}" ${yad_cols// / --column=} $yad_args)"
-            yad_res=$?
-            i=0
-            for col in ${yad_cols}; do
-              i=$((i+1))
-              value="$(echo "$selection" | cut -d "|" -f $i)"
-              case $col in
-                cond:HD)   conds="$value";;
-                name:TEXT) names="$value";;
-                nr:HD)       nrs="$value";;
-              esac
-            done
-            case $yad_res in
-             66|42)
-                 if (( $yad_res == 66 )); then
-                   yad_notebook images ${#pluginName[@]} #"${previewImage[@]}"
-                 else
-                   yad_notebook info ${#pluginName[@]} #"${description[@]}"
-                 fi
-                 if (( $ncols == $nargs )); then
-                   yad_args="TRUE	${yad_args#*	}"
-                 else
-                   warn "$yad_args"
-                   subs="s/(TRUE|FALSE)((\t[^\t]+){$((ncols-1))})/FALSE\2/g"
-
-                   for i in ${nrs[@]}; do
-                     subs="$subs;s/^((([^\t]+\t){$ncols}){$i})FALSE/\1TRUE/"
-                   done
-                   warn "${subs//;/\\n}"
-                   yad_args="$(echo "$yad_args" | sed -r "$subs")"
-                   warn "$yad_args"
-                 fi;;
-              0) break;;
-              *) die "You chose quit.";;
-            esac
-          done
-          while read fl; do
-            flags="$flags '$fl'"
-          done < <(echo "$conds")
-
-          for i in ${nrs[@]}; do
-            n=$((i*ncols))
-            while read s; do
-              sources[${#sources[@]}]="$s"
-            done  < <(echo "${plugin_srcs[$n]}" | tr "#" "\n") 
-            while read d; do
-              dests[${#dests[@]}]="$d"
-            done  < <(echo "${plugin_dests[$n]}" | tr "#" "\n")
-          done
-          yad_rows=0;;
-      plugin)  (( $yad_rows == 0 )) && yad_cols="$yad_cols name:TEXT"
-                 plugin_srcs=
-                 plugin_dests=
-                 pluginName[${#pluginName[@]}]="$(attr "name")"
-                 yad_args="${yad_args}FALSE	$(attr "name")	";;
-      /plugin) if (( $yad_rows == 0 )); then
-                   yad_cols="$yad_cols nr:HD"
-                 fi
-                 yad_args="$yad_args$yad_opt_args$yad_rows	"
-                 yad_rows=$((yad_rows+1));;
-        pattern) flagDependency=;;
-    esac
-  done < <(xmllint "$fomod_config")
-fi
-
-if (( ${#sources[@]} == 0 )); then
-  while read d; do
-    [ "$d" = "$bn/$bn.info" ] && continue;
-    for r in "${readme[@]}"; do
-      [ "$r" = "$d" ] && continue 2
-    done
-    [ -n "$fomod_dir" ] && [[ "$d" =~ ^$fomod_dir ]] && continue
-    [ -e "$d" ] && sources[${#sources[@]}]="$d" || die "$d does not exist from here?"
-    dests[${#dests[@]}]=""
-  done < <(echo "$ar_dirs")
-fi
-#yad --width=1024 --height=768 --list --no-click \
-#  '--text=<span foreground="white" font="24">folders to be transferred:</span>' \
-#    --no-selection --column=Name "${sources[@]}"
-#(( $? != 0 )) && die "You chose quit"
-cd "$mod_root/f4"
 exclude_git=
 [ -z "$dest_base" ] && exclude_git='--exclude="f4/.git*"'
 
-(( ${#sources[@]} != ${#dests[@]} )) && die "inconsistent number of sources and destinations for transfer"
+if [ -f "$fomod_config" ]; then
+    while read transfer; do
+        source="${transfer%	*}"
+        dest="${transfer#*	}"
+        dn_dest="$(dirname "$dest")"
+        mkdir -p "$dn_dest"
+        rsync --safe-links --prune-empty-dirs -rlptgo $exclude_git "$@" "$source" "$dest" ||
+        warn "failed:rsync --safe-links --prune-empty-dirs -rlptgo $exclude_git $@ '$source' '$dest'" 2
 
-transfer_selection= 
-for i in `seq 0 $((${#sources[@]}-1))`; do
-  src="${sources[$i]}"
-  tgt="$dest_base${dests[$i]}"
+    done < <(xmllint "$fomod_config" |
+    tidy -quiet -asxml -xml -indent -wrap 1024 --hide-comments 1 |
+    "$mod_root/FOModXML/target/release/fomod_xml" config -f "$mod_root/FOModXML/fallout4.json" /dev/stdin "$PWD" "$mod_root/f4/$dest_base")
+    cd "$mod_root/f4"
+    (( $stage == 1 )) && git ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
+else
 
-  [ -z "$src" ] && continue
-  [ -n "$(echo "${transfer_selection}" | grep "$src")" ] && continue
-  transfer_selection="${transfer_selection:-Selected for transfer:}
-$src"
+  if (( ${#sources[@]} == 0 )); then
+    while read d; do
+      [ "$d" = "$bn/$bn.info" ] && continue;
+      for r in "${readme[@]}"; do
+        [ "$r" = "$d" ] && continue 2
+      done
+      [ -n "$fomod_dir" ] && [[ "$d" =~ ^$fomod_dir ]] && continue
+      [ -e "$d" ] && sources[${#sources[@]}]="$d" || die "$d does not exist from here?"
+      dests[${#dests[@]}]=""
+    done < <(echo "$ar_dirs")
+  fi
+  cd "$mod_root/f4"
 
-  rsync --safe-links --prune-empty-dirs -rlptgo $exclude_git "$@" "$OLDPWD/$src" "$tgt" ||
-    warn "failed:rsync --safe-links --prune-empty-dirs -rlptgo $exclude_git '$@' '$OLDPWD/$src' '$tgt'" 2
+  (( ${#sources[@]} != ${#dests[@]} )) && die "inconsistent number of sources and destinations for transfer"
 
-  until resolve_tracked_case_insensitivity_for_type d; do :; done
-  resolve_tracked_case_insensitivity_for_type f
+  transfer_selection= 
+  for i in `seq 0 $((${#sources[@]}-1))`; do
+    src="${sources[$i]}"
+    tgt="$dest_base${dests[$i]}"
 
-  (( $stage == 1 )) && git ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
-done
+    [ -z "$src" ] && continue
+    [ -n "$(echo "${transfer_selection}" | grep "$src")" ] && continue
+    transfer_selection="${transfer_selection:-Selected for transfer:}
+  $src"
+
+    rsync --safe-links --prune-empty-dirs -rlptgo $exclude_git "$@" "$OLDPWD/$src" "$tgt"
+
+    until resolve_tracked_case_insensitivity_for_type d; do :; done
+    resolve_tracked_case_insensitivity_for_type f
+
+    (( $stage == 1 )) && git ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
+  done
+fi
+
 # if it's just everything, no need to list explicitly in commit message
 #[ -z "$fomod_dir" ] && transfer_selection=
 (( $stage == 1 )) && git commit -q -m "${commit_message}
