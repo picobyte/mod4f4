@@ -15,14 +15,17 @@ Options:
 
     --gitk      module management using gitk.
 
-    --subset=RE includes only the matching module (sub)directories.
-    --dest-base=path  directory wherein to place files. Default is 'Data/' unless --subset is provided
-                      and the transferred folders match ones in the root. RE: extended regular expression.
+    --dest-base=Data/ or "" place the files in this directory. The default is to guess the location
+                defaulting to Data/ but this may be wrong. Best is to set this parameter. Or at least
+                check that it installed right or follow up modules may guess wrong hereafter.
+                the --subset argument also influences this.
 
-                Whether or not a directories trailing slash is included in the capture matters.
+    --subset=RE includes only the matching module (sub)directories. RE: extended regular expression.
+
+                Whether or not a directory's trailing slash is included in the capture matters.
                 If uncaptured the directory is copied, otherwise the directory contents as rsync behaves.
 
-    --rm        remove the extracted module directory after commit.
+    --rm        remove the extracted module directory after commit. Won't if dir was already existing.
     --no-stage  don't stage and commit (allows manual staging). This implies --keep-mod.
                 Note that together with the --dry-run rsync option, no package contents are transferred.
                 The filename and directoryname case-insensitivity resolution is still run, though.
