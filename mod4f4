@@ -5,7 +5,7 @@
 
 
 # https://app.swaggerhub.com/apis-docs/NexusMods/nexus-mods_public_api_params_in_form_data/1.0#/
-set -e
+#set -e
 [ -n "$DEBUG" ] && set -x
 
 usage="Usage: $0 --init | $0 --gitk | $0 [options..] <archive.7z|archive.rar|archive.zip> [rsync options..]
@@ -160,6 +160,7 @@ _order_fn() {
 keep_mod=1
 stage=1
 append_message=
+keep_dest_base=
 dest_base=Data/
 ignore_nexus_reqs=
 ignore_off_site_reqs=
@@ -170,8 +171,8 @@ while (( $# != 0 )) ;do
     --subset) shift; re="$1";;
     --rm) keep_mod=0;;
     --no-stage) stage=0;;
-    --dest-base=*) dest_base="${1:12}";;
-    --dest-base) shift; dest_base="$1";;
+    --dest-base=*) keep_dest_base=1; dest_base="${1:12}";;
+    --dest-base) shift; keep_dest_base=1; dest_base="$1";;
     --ignore-nexus-reqs=*) ignore_nexus_reqs="${1:20}";;
     --ignore-nexus-reqs) shift; ignore_nexus_reqs="$1";;
     --ignore-off-site-reqs=*) ignore_off_site_reqs="${1:24}";;
@@ -211,14 +212,13 @@ if [ -z "$(echo "$ar_dirs" | egrep -v "^$stash/" 2>&1)" ] &&
     [ -z "$(find -H f4/ -mount -type d -iname "$stash")" ]; then
   warn "package contained installer directory '$stash'/\nonly extracting seleced with '${re}'"
 
-  [ -d "$stash" ] && keep_mod=1 || ${uz}x "$ar" "$stash" || die "..that was \`${uz}x $ar \"$stash\"' that failed." 2
+  [ -d "$stash" ] && keep_mod=1 || ${uz}x "$ar" "$stash" &> /dev/null || die "..that was \`${uz}x $ar \"$stash\"' that failed." 2
 
   find -H f4/ -mount -maxdepth 1 | grep -i -q -w -f <(ls -1 "$stash")
-  (( $? == 0 )) && dest_base=""
+  [ -z "$keep_dest_base"] && (( $? == 0 )) && dest_base=""
 
-elif (( $(echo "$ar_dirs" | wc -l) != 1 )) || [ -z "$(echo "$ar_dirs" | grep -vi "^fomod$")" ] ||
+elif (( $(echo "$ar_dirs" | wc -l) != 1 )) || [ -z "$(echo "$ar_dirs" | egrep -vi "^(fomod|[^/]+\.[^/]{2,3})$")" ] ||
     [ -n "$(find -H f4/ -mount -type d -iname "$ar_dirs")" ]; then
-
   warn "Package contained no dedicated installer directory, using '$bn'"
 
   stash="$bn"
@@ -228,13 +228,23 @@ elif (( $(echo "$ar_dirs" | wc -l) != 1 )) || [ -z "$(echo "$ar_dirs" | grep -vi
   else
     mkdir "$stash" || die "mkdir '$stash'?"
     cd "$stash"
-    ${uz}x "$mod_root/$ar" || die "..that was \`${uz}x $mod_root/$ar' that failed." 2
+    ${uz}x "$mod_root/$ar" &> /dev/null || die "..that was \`${uz}x $mod_root/$ar' that failed." 2
+  fi
+  if [ -f "$ar_dirs" ]; then
+    echo "packed a single file.. trying to resolve."
+    ar_files="$ar_dirs"
+    ar_dirs=""
+    #bn=""
+    #echo "directories: bm:'$bn' dir:'$ar_dirs', file:'$ar_files'"
   fi
 else
   stash="$ar_dirs"
   warn "package contained installer directory $stash/"
 
-  [ -d "$stash" ] && keep_mod=1 || ${uz}x "$ar" || die "..that was \`${uz}x $ar' that failed." 2
+  [ -d "$stash" ] && keep_mod=1 || ${uz}x "$ar" &> /dev/null || die "..that was \`${uz}x $ar' that failed." 2
+
+  find -H f4/ -mount -maxdepth 1 | grep -i -q -w -f <(ls -1 "$stash")
+  [ -z "$keep_dest_base"] && (( $? == 0 )) && dest_base=""
 fi
 
 readme=()
@@ -248,15 +258,16 @@ if [[ $DEBUG > 0 ]];then
     die "$ar not entirely extracted (then remove folder first)?"
 fi
 
-for f in $(echo "$ar_files" | egrep -i "^'?([^/]+/)?(fomod(/(info|ModuleConfig).xml)?|[^/]*readme\.txt)'?$"); do
+while read f; do
   case "$(echo "$f" | tr "[:upper:]" "[:lower:]")" in
     *fomod) fomod_dir="$f";;
     *fomod/info.xml) fomod_info="$f";;
     *fomod/moduleconfig.xml) fomod_config="$f";;
     *readme.txt) readme[${#readme[@]}]="$f";;
+    *docs/*readme.txt) readme[${#readme[@]}]="$f";;
     *) die "$f"
   esac
-done
+done < <(echo "$ar_files" | egrep -i "^'?([^/]+/)?(fomod(/(info|ModuleConfig).xml)?|[^/]*readme\.txt)'?$")
 
 # TODO: adult mods may require an apikey. Registration needs to be done
 # https://help.nexusmods.com/article/114-api-acceptable-use-policy
@@ -282,12 +293,12 @@ if [ -f "$fomod_info" ]; then
   mod_url="$(echo "$commit_message" | sed -n 's/^Website: //p')"
 
 elif [ -z "$append_message" ]; then
-  mod_nr="$(basename "${ar%.*}" | tr -c -s "[0-9.]" "\n" | egrep "^[0-9]{1,5}$")"
+  mod_nr="$(basename "${ar%.*}" | tr -c -s "[0-9.]" "\n" | egrep "^[0-9]{1,5}$" || true)"
   if (( $(echo "$mod_nr" | wc -l) != 1 )); then
     mod_nr="$(echo "$mod_nr" | sort -rg | sed '1{s/^/TRUE /;b};s/^/FALSE /' | xargs \
         yad --title="Select module number.." --list --width=640 --height=480\
         --text="<span foreground='white' font='18'>Please indicate the mod nr. Cancel if none.</span>" \
-        --list --radiolist --column=selection:RD --column=number:NUM)"
+        --list --radiolist --column=selection:RD --column=number:NUM || true)"
     n=$(echo "${mod_nr}" |tr -c -d "[:digit:]")
     (( $? == 0 )) && mod_url="http://www.nexusmods.com/fallout4/mods/$n/"
   fi
@@ -322,20 +333,21 @@ Website: $mod_url"
         commit_message=
       fi
     fi
+    if [ -f "${bn}.info" ]; then
+      mod_reqs="$(sed -n -r '/^###([^ ]+ )+requirements/{N;:a;N;/\n$/!ba;s/[ \t]+(\n|$)//g;p}' "${bn}.info")"
 
-    mod_reqs="$(sed -n -r '/^###([^ ]+ )+requirements/{N;:a;N;/\n$/!ba;s/[ \t]+(\n|$)//g;p}' "${bn}.info")"
-
-    while read url name; do
-      if [ "${url:0:27}" = "https://www.nexusmods.com/" ]; then
-        commit="$(git log -E --grep "^   (Website: $url|Name: $name)$")"
-        [ -z "$commit" ] && [ -n "$(echo "$name" | egrep "$ignore_nexus_reqs")" ] &&
-          die "Nexus requirement $name is not yet installed (use --ignore-nexus-reqs=RE to ignore this)"
-      else
-        apropos $name
-        (( $? != 0 )) && [ -n "$(echo "$name" | egrep "$ignore_off_site_reqs")" ] &&
-          die "Off-site requirement $name may not yet be installed (use --ignore-off-site-reqs=RE to ignore this)"
-      fi
-    done < <(echo "$mod_reqs" | sed -n -r 's~^\[(.*)\]\((https?://.*)\) \|  $~\2 \1~p')
+      while read url name; do
+        if [ "${url:0:27}" = "https://www.nexusmods.com/" ]; then
+          commit="$(git log -E --grep "^   (Website: $url|Name: $name)$")"
+          [ -z "$commit" ] && [ -n "$(echo "$name" | egrep "$ignore_nexus_reqs")" ] &&
+            die "Nexus requirement $name is not yet installed (use --ignore-nexus-reqs=RE to ignore this)"
+        else
+          apropos $name
+          (( $? != 0 )) && [ -n "$(echo "$name" | egrep "$ignore_off_site_reqs")" ] &&
+            die "Off-site requirement $name may not yet be installed (use --ignore-off-site-reqs=RE to ignore this)"
+        fi
+      done < <(echo "$mod_reqs" | sed -n -r 's~^\[(.*)\]\((https?://.*)\) \|  $~\2 \1~p')
+    fi
   fi
 fi
 exclude_git=
@@ -350,10 +362,13 @@ if [ -f "$fomod_config" ]; then
         rsync --safe-links --prune-empty-dirs -rlptgo $exclude_git "$@" "$source" "$dest" ||
         warn "failed:rsync --safe-links --prune-empty-dirs -rlptgo $exclude_git $@ '$source' '$dest'" 2
 
+        # FIXME: this is still needed..
     done < <(xmllint "$fomod_config" |
     tidy -quiet -asxml -xml -indent -wrap 1024 --hide-comments 1 |
     "$mod_root/FOModXML/target/release/fomod_xml" config -f "$mod_root/FOModXML/fallout4.json" /dev/stdin "$PWD" "$mod_root/f4/$dest_base")
     cd "$mod_root/f4"
+    until resolve_tracked_case_insensitivity_for_type d; do :; done
+    resolve_tracked_case_insensitivity_for_type f
     (( $stage == 1 )) && git ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
 else
 
@@ -364,7 +379,15 @@ else
         [ "$r" = "$d" ] && continue 2
       done
       [ -n "$fomod_dir" ] && [[ "$d" =~ ^$fomod_dir ]] && continue
-      [ -e "$d" ] && sources[${#sources[@]}]="$d" || die "$d does not exist from here?"
+      if [ -n "$d" ]; then
+        if [ -e "$d" ]; then
+            [ -d "$d" ] && sources[${#sources[@]}]="$d/" || sources[${#sources[@]}]="$d"
+        else
+            die "$d does not exist from here($PWD)?"
+        fi
+      else
+        sources[${#sources[@]}]="$ar_files"
+      fi
       dests[${#dests[@]}]=""
     done < <(echo "$ar_dirs")
   fi
