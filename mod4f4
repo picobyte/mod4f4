@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mod4f4 v0.07
+# mod4f4 v0.08
 # GPL v3
 
 
@@ -18,12 +18,6 @@ Options:
     --dest-base=Data/ or "" place the files in this directory. The default is to guess the location
                 defaulting to Data/ but this may be wrong. Best is to set this parameter. Or at least
                 check that it installed right or follow up modules may guess wrong hereafter.
-                the --subset argument also influences this.
-
-    --subset=RE includes only the matching module (sub)directories. RE: extended regular expression.
-
-                Whether or not a directory's trailing slash is included in the capture matters.
-                If uncaptured the directory is copied, otherwise the directory contents as rsync behaves.
 
     --rm        remove the extracted module directory after commit. Won't if dir was already existing.
     --no-stage  don't stage and commit (allows manual staging). This implies --keep-mod.
@@ -95,9 +89,11 @@ if [ "$1" = "--init" ] || [ "$1" = "--init-no-check" ]; then
     fi
     git init
     warn "Setting up revision control.. (takes a few minutes)" 1>&2
-    git ls-files -o --exclude-standard | xargs -r -d "\n" -I {} git add "{}"
+    cp "$mod_rppt/gitignore_f4" .gitignore
+    git -C "$mod_root/f4/" ls-files -o -i --exclude-standard | xargs -r -d "\n" chmod ugo-w
+    git -C "$mod_root/f4/" ls-files -o --exclude-standard | xargs -r -d "\n" -I {} git add "{}"
     git commit -m 'Clean Fallout 4 game'
-    cd - 2>/dev/null
+    cd "$mod_rppt/"
   fi
   exit 0
 elif [ ! -e "$mod_root/f4" ]; then
@@ -124,7 +120,7 @@ resolve_tracked_case_insensitivity_for_type() {
       if [ -n "$snd_in_repo" ]; then
         [ -n "$fst_in_repo" ] && die "both $first and $snd are tracked" 126
         if [ -d "$snd" ]; then
-          [ -n "$(ls -1 $first/)" ] && mv "$first"/* "$snd/" || rmdir "$first"
+          [ -n "$(ls -1 "$first/")" ] && mv "$first"/* "$snd/" || rmdir "$first"
         elif [ -f "$first" ]; then
           mv "$first" "$snd";
         fi
@@ -132,7 +128,7 @@ resolve_tracked_case_insensitivity_for_type() {
       else
         [ -z "$fst_in_repo" ] && echo "neither $first nor $snd tracked, just using first" 1>&2
         if [ -d "$snd" ]; then
-          [ -n "$(ls -1 $snd/)" ] &&  mv "$snd"/* "$first/" || rmdir "$snd"
+          [ -n "$(ls -1 "$snd/")" ] &&  mv "$snd"/* "$first/" || rmdir "$snd"
         elif [ -f "$snd" ]; then
           mv "$snd" "$first"
         fi
@@ -157,8 +153,6 @@ _order_fn() {
 }
 
 
-# whether or not you capture the trailing directory slash with --subset regexp matterd.
-# if uncaptured the directory is copied, otherwise the directory contents.
 
 keep_mod=1
 stage=1
@@ -170,8 +164,6 @@ ignore_off_site_reqs=
 re="[^ ][^/]*"
 while (( $# != 0 )) ;do
   case "$1" in
-    --subset=*) re="${1:9}";;
-    --subset) shift; re="$1";;
     --rm) keep_mod=0;;
     --no-stage) stage=0;;
     --dest-base=*) keep_dest_base=1; dest_base="${1:12}";;
@@ -188,6 +180,8 @@ while (( $# != 0 )) ;do
   shift;
 done
 
+[ $stage -eq 0 ] && keep_mod=1
+
 ar="$1"
 shift
 [ -e "$ar" ] || die "${usage}\nError: No archive: '$ar'"
@@ -202,9 +196,9 @@ esac
 # all list files between these markers
 
 ar_files="$(${uz}l "$ar" | sed -n -r '/^---/,/^---/{/^---/b;s~^.*  ([^ ].*)$~\1~p}')"
-ar_dirs="$(echo "$ar_files" | sed -n -r "s~^($re)(.*)?$~\1~p" | uniq)"
+ar_dirs="$(echo "$ar_files" | sed -n -r "s~^([^ ][^/]*)(.*)?$~\1~p" | uniq)"
 
-[ -z "$ar_dirs" ] && die "regular expression '$re' matches no files in archive '$ar'"
+[ -z "$ar_dirs" ] && die "regular expression '[^ ][^/]*' matches no files in archive '$ar'"
 
 
 bn="$(basename "${ar%.*}")"
@@ -218,7 +212,7 @@ if [ -z "$(echo "$ar_dirs" | egrep -v "^$stash/" 2>&1)" ] &&
   [ -d "$stash" ] && keep_mod=1 || ${uz}x "$ar" "$stash" &> /dev/null || die "..that was \`${uz}x $ar \"$stash\"' that failed." 2
 
   find -H f4/ -mount -maxdepth 1 | grep -i -q -w -f <(ls -1 "$stash")
-  [ -z "$keep_dest_base"] && (( $? == 0 )) && dest_base=""
+  [ -z "$keep_dest_base" ] && (( $? == 0 )) && dest_base=""
 
 elif (( $(echo "$ar_dirs" | wc -l) != 1 )) || [ -z "$(echo "$ar_dirs" | egrep -vi "^(fomod|[^/]+\.[^/]{2,3})$")" ] ||
     [ -n "$(find -H f4/ -mount -type d -iname "$ar_dirs")" ]; then
@@ -247,7 +241,7 @@ else
   [ -d "$stash" ] && keep_mod=1 || ${uz}x "$ar" &> /dev/null || die "..that was \`${uz}x $ar' that failed." 2
 
   find -H f4/ -mount -maxdepth 1 | grep -i -q -w -f <(ls -1 "$stash")
-  [ -z "$keep_dest_base"] && (( $? == 0 )) && dest_base=""
+  [ -z "$keep_dest_base" ] && (( $? == 0 )) && dest_base=""
 fi
 
 readme=()
@@ -306,7 +300,7 @@ elif [ -z "$append_message" ]; then
     (( $? == 0 )) && mod_url="http://www.nexusmods.com/fallout4/mods/$n/"
   fi
 fi
-[ -n "$mod_url" ] && [ ! -e "${bn}.info" ] && wget -O- "$mod_url" | html2text > "${bn}.info"
+[ -n "$(echo "$mod_url" | grep -i nexus)" ] && [ ! -e "${bn}.info" ] && wget -O- "$mod_url" | html2text > "${bn}.info"
 
 if [ -e "${bn}.info" ]; then
   adult_mod_stub="This mod contains adult content. You can turn adult content on in your"
@@ -353,8 +347,9 @@ Website: $mod_url"
     fi
   fi
 fi
-exclude_git=
-[ -z "$dest_base" ] && exclude_git='--exclude="f4/.git*"'
+
+exclude_git=""
+[ -z "$dest_base" ] && exclude_git="$exclude_git--exclude=\".git*\""
 
 if [ -f "$fomod_config" ]; then
     while read transfer; do
@@ -362,17 +357,23 @@ if [ -f "$fomod_config" ]; then
         dest="${transfer#*	}"
         dn_dest="$(dirname "$dest")"
         mkdir -p "$dn_dest"
-        rsync --safe-links --prune-empty-dirs -rlptgo $exclude_git "$@" "$source" "$dest" ||
-        warn "failed:rsync --safe-links --prune-empty-dirs -rlptgo $exclude_git $@ '$source' '$dest'" 2
+        # whether or not a source dir has a trailing directory slash matters.
+        # if  the directory is copied, otherwise the directory contents.
 
-        # FIXME: this is still needed..
+        # When using multiple include/exclude option, the first matching rule applies.
+        rsync --chmod=Du=rwx,Dgo=rx,Fu=rw,Fog=r --safe-links --prune-empty-dirs -rltgo \
+            --exclude-from=<(git -C "$mod_root/f4/" ls-files --exclude-standard -oi --directory) \
+            $exclude_git "$@" "$source" "$dest" ||
+        warn "failed:rsync [options..] $exclude_git $@ '$source' '$dest'" 2
+
+        # FIXME: this is still needed, FOModXML dosn't resolve it entirely..
     done < <(xmllint "$fomod_config" |
     tidy -quiet -asxml -xml -indent -wrap 1024 --hide-comments 1 |
     "$mod_root/FOModXML/target/release/fomod_xml" config -f "$mod_root/FOModXML/fallout4.json" /dev/stdin "$PWD" "$mod_root/f4/$dest_base")
     cd "$mod_root/f4"
     until resolve_tracked_case_insensitivity_for_type d; do :; done
     resolve_tracked_case_insensitivity_for_type f
-    (( $stage == 1 )) && git ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
+    (( $stage == 1 )) && git -C "$mod_root/f4/" ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
 else
 
   if (( ${#sources[@]} == 0 )); then
@@ -398,31 +399,25 @@ else
 
   (( ${#sources[@]} != ${#dests[@]} )) && die "inconsistent number of sources and destinations for transfer"
 
-  transfer_selection= 
   for i in `seq 0 $((${#sources[@]}-1))`; do
     src="${sources[$i]}"
     tgt="$dest_base${dests[$i]}"
 
     [ -z "$src" ] && continue
-    [ -n "$(echo "${transfer_selection}" | grep "$src")" ] && continue
-    transfer_selection="${transfer_selection:-Selected for transfer:}
-  $src"
 
     rsync --safe-links --prune-empty-dirs -rlptgo $exclude_git "$@" "$OLDPWD/$src" "$tgt"
+  done
 
     until resolve_tracked_case_insensitivity_for_type d; do :; done
     resolve_tracked_case_insensitivity_for_type f
 
-    (( $stage == 1 )) && git ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
-  done
+    (( $stage == 1 )) && git -C "$mod_root/f4/" ls-files -o -m --exclude-standard | xargs -r -d "\n" git stage --
 fi
 
 # if it's just everything, no need to list explicitly in commit message
-#[ -z "$fomod_dir" ] && transfer_selection=
 (( $stage == 1 )) && git commit -q -m "${commit_message}
 Archive: $(basename "$ar")
 $append_message
-$mod_reqs
-$transfer_selection";
+$mod_reqs";
 (( $keep_mod == 0 )) && rm -rf "$stash"
 cd "$mod_root"
