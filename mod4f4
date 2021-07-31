@@ -218,7 +218,7 @@ if [ -z "$(echo "$ar_dirs" | egrep -v "^$stash/" 2>&1)" ] &&
   [ -d "$stash" ] && keep_mod=1 || ${uz}x "$ar" "$stash" &> /dev/null || die "..that was \`${uz}x $ar \"$stash\"' that failed." 2
 
   find -H f4/ -mount -maxdepth 1 | grep -i -q -w -f <(ls -1 "$stash")
-  [ -z "$keep_dest_base"] && (( $? == 0 )) && dest_base=""
+  [ -z "$keep_dest_base" ] && (( $? == 0 )) && dest_base=""
 
 elif (( $(echo "$ar_dirs" | wc -l) != 1 )) || [ -z "$(echo "$ar_dirs" | egrep -vi "^(fomod|[^/]+\.[^/]{2,3})$")" ] ||
     [ -n "$(find -H f4/ -mount -type d -iname "$ar_dirs")" ]; then
@@ -247,7 +247,7 @@ else
   [ -d "$stash" ] && keep_mod=1 || ${uz}x "$ar" &> /dev/null || die "..that was \`${uz}x $ar' that failed." 2
 
   find -H f4/ -mount -maxdepth 1 | grep -i -q -w -f <(ls -1 "$stash")
-  [ -z "$keep_dest_base"] && (( $? == 0 )) && dest_base=""
+  [ -z "$keep_dest_base" ] && (( $? == 0 )) && dest_base=""
 fi
 
 readme=()
