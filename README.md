@@ -21,6 +21,9 @@ tidy 7z unrar unzip git rsync sed sort uniq wc xml2 yad xmllint wget
 
 unless you can manage modules with git on the commandline, gitk is also required and maybe git-gui.
 
+Also required is rust, and in the submodule FOModXML a 'cargo build --release' needs to be run.
+See also https://sr.ht/~rjck/FOModXML/
+
 ## What won't work:
 
 Using this scheme along with another mod manager. Not sure about all, but be warned by the name Vortex. Don't even try it with this setup.
