@@ -1,8 +1,7 @@
 Data/DLC*
 Data/Fallout4*
 Data/ccBGSFO*
-Data/DLCUltraHighResolution - Textures11.ba2
-Data/DLCworkshop01 - Textures.ba2
+Data/DLC*
 Data/DLCUltraHighResolution.esm
 Data/DLCworkshop03 - Main.ba2
 Data/DLCNukaWorld - Voices_en.ba2
@@ -242,3 +241,14 @@ nvToolsExt64_1.dll
 steam_api64.dll
 F4.exe
 Data/Video/
+Data/ccFRSFO4001-HandmadeShotgun - Main.ba2
+Data/ccFRSFO4001-HandmadeShotgun - Textures.ba2
+Data/ccFSVFO4001-ModularMilitaryBackpack - Main.ba2
+Data/ccFSVFO4001-ModularMilitaryBackpack - Textures.ba2
+Data/ccFSVFO4002-MidCenturyModern - Main.ba2
+Data/ccFSVFO4002-MidCenturyModern - Textures.ba2
+Fallout4.ccc
+installscript.vdf
+Data/Tools/BodySlide/Log_BS.txt
+Data/Tools/BodySlide/Log_OS.txt
+Data/F4SE/Plugins/AAF_game_started_*
