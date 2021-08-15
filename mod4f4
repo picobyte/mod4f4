@@ -89,11 +89,11 @@ if [ "$1" = "--init" ] || [ "$1" = "--init-no-check" ]; then
     fi
     git init
     warn "Setting up revision control.. (takes a few minutes)" 1>&2
-    cp "$mod_rppt/gitignore_f4" .gitignore
+    cp "$mod_root/gitignore_f4" .gitignore
     git -C "$mod_root/f4/" ls-files -o -i --exclude-standard | xargs -r -d "\n" chmod ugo-w
     git -C "$mod_root/f4/" ls-files -o --exclude-standard | xargs -r -d "\n" -I {} git add "{}"
     git commit -m 'Clean Fallout 4 game'
-    cd "$mod_rppt/"
+    cd "$mod_root/"
   fi
   exit 0
 elif [ ! -e "$mod_root/f4" ]; then
@@ -201,18 +201,25 @@ ar_dirs="$(echo "$ar_files" | sed -n -r "s~^([^ ][^/]*)(.*)?$~\1~p" | uniq)"
 
 
 bn="$(basename "${ar%.*}")"
-[[ "$bn" == ".." ]] && die "n0ob!"
-[[ "$bn" == "." ]] && die "noob!"
+[[ "${bn:0:2}" == ".." ]] && die "noob!"
 
 stash="$bn"
 if [ -d "$stash" ]; then
-  cd "$stash"
-  keep_mod=1
-else
+  echo "$stash already exists, ok to remove (Y/n)"
+  read -n 1 ask
+  [[ $ask == y ]] && rm -rf "$stash";
+  [[ $ask == Y ]] && rm -rf "$stash";
+  [[ $ask == "" ]] && rm -rf "$stash";
+fi
+
+if [ ! -d "$stash" ]; then
   mkdir "$stash" || die "mkdir '$stash'?"
   cd "$stash"
   ${uz}x "$mod_root/$ar" &> /dev/null || die "..that was \`${uz}x $mod_root/$ar' that failed." 2
+else
+  cd "$stash"
 fi
+
 if [ -f "$ar_dirs" ]; then
   echo "packed a single file." 1>&2
   ar_files="$ar_dirs"
