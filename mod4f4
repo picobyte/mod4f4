@@ -161,7 +161,6 @@ keep_dest_base=
 dest_base=Data/
 ignore_nexus_reqs=
 ignore_off_site_reqs=
-re="[^ ][^/]*"
 while (( $# != 0 )) ;do
   case "$1" in
     --rm) keep_mod=0;;
@@ -202,46 +201,24 @@ ar_dirs="$(echo "$ar_files" | sed -n -r "s~^([^ ][^/]*)(.*)?$~\1~p" | uniq)"
 
 
 bn="$(basename "${ar%.*}")"
+[[ "$bn" == ".." ]] && die "n0ob!"
+[[ "$bn" == "." ]] && die "noob!"
 
-stash="${re%%/*}"
-
-if [ -z "$(echo "$ar_dirs" | egrep -v "^$stash/" 2>&1)" ] &&
-    [ -z "$(find -H f4/ -mount -type d -iname "$stash")" ]; then
-  warn "package contained installer directory '$stash'/\nonly extracting seleced with '${re}'"
-
-  [ -d "$stash" ] && keep_mod=1 || ${uz}x "$ar" "$stash" &> /dev/null || die "..that was \`${uz}x $ar \"$stash\"' that failed." 2
-
-  find -H f4/ -mount -maxdepth 1 | grep -i -q -w -f <(ls -1 "$stash")
-  [ -z "$keep_dest_base" ] && (( $? == 0 )) && dest_base=""
-
-elif (( $(echo "$ar_dirs" | wc -l) != 1 )) || [ -z "$(echo "$ar_dirs" | egrep -vi "^(fomod|[^/]+\.[^/]{2,3})$")" ] ||
-    [ -n "$(find -H f4/ -mount -type d -iname "$ar_dirs")" ]; then
-  warn "Package contained no dedicated installer directory, using '$bn'"
-
-  stash="$bn"
-  if [ -d "$stash" ]; then
-    cd "$stash"
-    keep_mod=1
-  else
-    mkdir "$stash" || die "mkdir '$stash'?"
-    cd "$stash"
-    ${uz}x "$mod_root/$ar" &> /dev/null || die "..that was \`${uz}x $mod_root/$ar' that failed." 2
-  fi
-  if [ -f "$ar_dirs" ]; then
-    echo "packed a single file.. trying to resolve."
-    ar_files="$ar_dirs"
-    ar_dirs=""
-    #bn=""
-    #echo "directories: bm:'$bn' dir:'$ar_dirs', file:'$ar_files'"
-  fi
+stash="$bn"
+if [ -d "$stash" ]; then
+  cd "$stash"
+  keep_mod=1
 else
-  stash="$ar_dirs"
-  warn "package contained installer directory $stash/"
-
-  [ -d "$stash" ] && keep_mod=1 || ${uz}x "$ar" &> /dev/null || die "..that was \`${uz}x $ar' that failed." 2
-
-  find -H f4/ -mount -maxdepth 1 | grep -i -q -w -f <(ls -1 "$stash")
-  [ -z "$keep_dest_base" ] && (( $? == 0 )) && dest_base=""
+  mkdir "$stash" || die "mkdir '$stash'?"
+  cd "$stash"
+  ${uz}x "$mod_root/$ar" &> /dev/null || die "..that was \`${uz}x $mod_root/$ar' that failed." 2
+fi
+if [ -f "$ar_dirs" ]; then
+  echo "packed a single file." 1>&2
+  ar_files="$ar_dirs"
+  ar_dirs=""
+  #bn=""
+  #echo "directories: bm:'$bn' dir:'$ar_dirs', file:'$ar_files'"
 fi
 
 readme=()
@@ -352,6 +329,9 @@ exclude_git=""
 [ -z "$dest_base" ] && exclude_git="$exclude_git--exclude=\".git*\""
 
 if [ -f "$fomod_config" ]; then
+    cd "$mod_root/$stash"
+    ls -1d */*/ | xargs -d "\n" -n 1 ln -s
+    ls -1d */* | while read f; do [ -f "$f" ] && ln "$f"; done
     while read transfer; do
         source="${transfer%	*}"
         dest="${transfer#*	}"
